@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 import feedparser
+import requests
 
 from models import RedditHit
 
@@ -13,6 +14,7 @@ _SEARCH_URL = "https://www.reddit.com/search.rss?q={q}&sort=new&t=day"
 _SUB_URL = "https://www.reddit.com/r/{sub}/new.rss"
 _DEFAULT_UA = "zenskar-marketing-monitor/1.0 (contact: priyam.s@zenskar.com)"
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_INTER_CALL_DELAY = 0.75  # seconds between RSS fetches; avoids Reddit burst detection
 
 
 def _ua() -> str:
@@ -50,16 +52,45 @@ def _entry_datetime(entry) -> datetime:
     return datetime.fromtimestamp(timegm(struct), tz=timezone.utc)
 
 
+def _looks_like_html(body: str) -> bool:
+    head = body[:1000].lstrip().lower()
+    return head.startswith("<!doctype html") or head.startswith("<html")
+
+
 def _fetch_feed(url: str, max_retries: int = 3) -> list:
+    """Fetch via requests so we control headers, detect Reddit's anti-bot
+    HTML interstitial (status 200 + HTML body), and retry with backoff."""
     delay = 2.0
     for attempt in range(max_retries):
-        result = feedparser.parse(url, agent=_ua())
-        status = getattr(result, "status", 200)
-        if status in (429, 503):
-            print(f"[rss] {status} on {url}; backing off {delay}s")
+        try:
+            resp = requests.get(
+                url,
+                headers={
+                    "User-Agent": _ua(),
+                    "Accept": "application/atom+xml, application/rss+xml, application/xml;q=0.9, */*;q=0.1",
+                },
+                timeout=20,
+                allow_redirects=True,
+            )
+        except Exception as e:
+            print(f"[rss] request error on {url}: {e}")
             time.sleep(delay)
             delay *= 2
             continue
+
+        if resp.status_code in (429, 503):
+            print(f"[rss] {resp.status_code} on {url}; backing off {delay}s")
+            time.sleep(delay)
+            delay *= 2
+            continue
+
+        if _looks_like_html(resp.text):
+            print(f"[rss] HTML interstitial on {url} (likely bot detection); backing off {delay}s")
+            time.sleep(delay)
+            delay *= 2
+            continue
+
+        result = feedparser.parse(resp.content)
         if getattr(result, "bozo", False) and not result.entries:
             print(f"[rss] parse failure on {url}: {getattr(result, 'bozo_exception', '')}")
             return []
@@ -124,13 +155,18 @@ def fetch_search(keyword: str) -> list[RedditHit]:
 
 
 def fetch_all(subreddits: list[str], keywords: list[str]) -> list[RedditHit]:
-    """Fetch both layers of discovery and merge by post_id, union matched keywords."""
+    """Fetch both layers of discovery and merge by post_id, union matched keywords.
+    Paces calls with a short delay so Reddit doesn't flag the traffic as a burst."""
     merged: dict[str, RedditHit] = {}
+    endpoints = len(subreddits) + len(keywords)
+    idx = 0
     for sub in subreddits:
         for hit in fetch_subreddit_new(sub):
-            existing = merged.get(hit.post_id)
-            if existing is None:
+            if hit.post_id not in merged:
                 merged[hit.post_id] = hit
+        idx += 1
+        if idx < endpoints:
+            time.sleep(_INTER_CALL_DELAY)
     for kw in keywords:
         for hit in fetch_search(kw):
             existing = merged.get(hit.post_id)
@@ -140,4 +176,7 @@ def fetch_all(subreddits: list[str], keywords: list[str]) -> list[RedditHit]:
                 for k in hit.matched_keywords:
                     if k not in existing.matched_keywords:
                         existing.matched_keywords.append(k)
+        idx += 1
+        if idx < endpoints:
+            time.sleep(_INTER_CALL_DELAY)
     return list(merged.values())

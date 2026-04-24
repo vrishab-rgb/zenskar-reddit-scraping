@@ -53,22 +53,60 @@ def test_post_id_and_subreddit_helpers():
     assert rss._post_id_from_link("not a reddit url") is None
 
 
+class _FakeResp:
+    def __init__(self, status_code=200, text="", content=b""):
+        self.status_code = status_code
+        self.text = text
+        self.content = content or text.encode("utf-8")
+
+
+def _load_sample_bytes() -> bytes:
+    with open(_FIXTURE, "rb") as f:
+        return f.read()
+
+
 def test_fetch_feed_backs_off_on_429(mocker):
-    class Result:
-        def __init__(self, status, entries=None):
-            self.status = status
-            self.entries = entries or []
-            self.bozo = False
-
+    sample = _load_sample_bytes()
+    sequence = [
+        _FakeResp(status_code=429),
+        _FakeResp(status_code=429),
+        _FakeResp(status_code=200, content=sample),
+    ]
     calls = []
-    sequence = [Result(429), Result(429), Result(200, entries=["ok"])]
 
-    def fake_parse(url, agent=None):
+    def fake_get(url, headers=None, timeout=None, allow_redirects=True):
         calls.append(url)
         return sequence[len(calls) - 1]
 
-    mocker.patch("sources.rss.feedparser.parse", side_effect=fake_parse)
+    mocker.patch("sources.rss.requests.get", side_effect=fake_get)
     mocker.patch("sources.rss.time.sleep", return_value=None)
     entries = rss._fetch_feed("https://example.com/feed")
-    assert entries == ["ok"]
+    assert len(entries) == 3  # fixture has 3 entries
     assert len(calls) == 3
+
+
+def test_fetch_feed_retries_on_html_interstitial(mocker):
+    sample = _load_sample_bytes()
+    html = "<!DOCTYPE html>\n<html><body>Please verify you are human</body></html>"
+    sequence = [
+        _FakeResp(status_code=200, text=html),
+        _FakeResp(status_code=200, content=sample),
+    ]
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None, allow_redirects=True):
+        calls.append(url)
+        return sequence[len(calls) - 1]
+
+    mocker.patch("sources.rss.requests.get", side_effect=fake_get)
+    mocker.patch("sources.rss.time.sleep", return_value=None)
+    entries = rss._fetch_feed("https://example.com/feed")
+    assert len(entries) == 3
+    assert len(calls) == 2
+
+
+def test_looks_like_html_discriminator():
+    assert rss._looks_like_html("<!DOCTYPE html>\n<html>") is True
+    assert rss._looks_like_html("  <html lang='en'>") is True
+    assert rss._looks_like_html("<?xml version='1.0'?>") is False
+    assert rss._looks_like_html("") is False

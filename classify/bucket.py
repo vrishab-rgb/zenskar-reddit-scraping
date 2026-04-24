@@ -10,6 +10,12 @@ _client = None
 _VALID_BUCKETS = {"competitor_mention", "lead_signal", "icp_discussion", "noise"}
 
 
+class BucketRateLimited(Exception):
+    """Stage-2 could not run because Groq's 120B quota is exhausted. Caller
+    should defer this hit (do NOT upsert, do NOT record classification) so
+    the next run after quota reset can retry from scratch."""
+
+
 def _get_client() -> Groq:
     global _client
     if _client is None:
@@ -77,6 +83,9 @@ def classify(enriched: EnrichedHit) -> Classification:
         raw = resp.choices[0].message.content
         data = json.loads(raw)
     except Exception as e:
+        msg = str(e)
+        if "429" in msg or "rate_limit" in msg.lower():
+            raise BucketRateLimited(msg) from e
         print(f"[bucket] Groq error for {hit.post_id}: {e}")
         return _fallback_noise(hit.post_id)
 

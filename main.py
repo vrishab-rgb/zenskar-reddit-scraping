@@ -5,6 +5,7 @@ from collections import Counter
 import db
 from classify import bucket as bucket_mod
 from classify import relevance
+from classify.bucket import BucketRateLimited
 from classify.relevance import RelevanceRateLimited
 from config import (
     COMPETITOR_SEARCH_TERMS,
@@ -72,7 +73,15 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
         else:
             counters["yars_ok"] += 1
 
-    cls = bucket_mod.classify(enriched)
+    try:
+        cls = bucket_mod.classify(enriched)
+    except BucketRateLimited:
+        # Stage-2 quota exhausted. We already upserted the hit above, but
+        # skip recording a classification so the next run (post quota reset)
+        # re-runs stage-2 and fills it in.
+        counters["stage2_rate_limited"] += 1
+        return
+
     db.record_classification(cls)
     counters[f"bucket_{cls.bucket}"] += 1
 
@@ -93,6 +102,7 @@ def _summary(counters: Counter) -> str:
         "new_inserted", "already_seen", "stage1_called", "stage1_passed", "stage1_dropped",
         "stage1_rate_limited", "stage1_budget_skipped",
         "enrich_called", "enrich_budget_skipped", "yars_ok", "yars_failed",
+        "stage2_rate_limited",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
         "alerts_posted", "already_alerted",
     ]

@@ -74,11 +74,28 @@ def _headers() -> dict[str, str]:
     return {"User-Agent": _ua(), **_BASE_HEADERS}
 
 
+def _is_connection_reset(exc: BaseException) -> bool:
+    """Walk the exception chain looking for a TCP-level reset. Cloudflare
+    returns these when it has flagged the caller; retrying many times in a row
+    reinforces the bot reputation and makes recovery slower."""
+    cur = exc
+    while cur is not None:
+        if isinstance(cur, ConnectionResetError):
+            return True
+        msg = str(cur).lower()
+        if "forcibly closed" in msg or "connection reset" in msg or "connection aborted" in msg:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 def _fetch_feed(url: str, max_retries: int = 4) -> list:
     """Fetch via requests so we control headers, detect Reddit's anti-bot
     HTML interstitial (status 200 + HTML body), and retry with backoff.
-    Uses jittered backoff to break deterministic retry patterns."""
+    On TCP resets we fail fast (one retry) since Cloudflare's IP-level block
+    won't clear in seconds — the next cron tick or a fresh CI runner IP will."""
     delay = 3.0
+    reset_retries_used = 0
     for attempt in range(max_retries):
         try:
             resp = requests.get(
@@ -88,9 +105,15 @@ def _fetch_feed(url: str, max_retries: int = 4) -> list:
                 allow_redirects=True,
             )
         except Exception as e:
-            # ConnectionResetError, timeouts, and SSL errors all land here.
-            # Cloudflare often drops connections for a few seconds then relents —
-            # a jittered wait usually recovers on the next attempt.
+            if _is_connection_reset(e):
+                reset_retries_used += 1
+                if reset_retries_used > 1:
+                    print(f"[rss] persistent TCP reset on {url}; giving up (IP likely flagged)")
+                    return []
+                wait = random.uniform(5, 10)
+                print(f"[rss] connection reset on {url}: {e} (1 retry in {wait:.1f}s)")
+                time.sleep(wait)
+                continue
             wait = delay + random.uniform(0, delay)
             print(f"[rss] request error on {url}: {e} (retry in {wait:.1f}s)")
             time.sleep(wait)

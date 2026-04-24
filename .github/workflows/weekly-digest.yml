@@ -33,7 +33,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_DIGEST: ${{ secrets.SLACK_WEBHOOK_DIGEST }}
-          SLACK_WEBHOOK_DEFAULT: ${{ secrets.SLACK_WEBHOOK_DEFAULT }}
+          SLACK_WEBHOOK_ALERTS: ${{ secrets.SLACK_WEBHOOK_ALERTS }}
 
       - name: Commit generated digest
         run: |

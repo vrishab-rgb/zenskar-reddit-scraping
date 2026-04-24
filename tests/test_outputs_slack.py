@@ -30,10 +30,7 @@ def _enriched(bucket: str) -> tuple[EnrichedHit, Classification]:
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for v in [
-        "SLACK_WEBHOOK_COMPETITORS", "SLACK_WEBHOOK_LEADS", "SLACK_WEBHOOK_ICP",
-        "SLACK_WEBHOOK_DEFAULT", "SLACK_WEBHOOK_HEALTH", "SLACK_WEBHOOK_DIGEST",
-    ]:
+    for v in ["SLACK_WEBHOOK_ALERTS", "SLACK_WEBHOOK_DIGEST", "SLACK_WEBHOOK_HEALTH"]:
         monkeypatch.delenv(v, raising=False)
 
 
@@ -43,40 +40,29 @@ class _FakeResp:
         pass
 
 
-def test_bucket_routes_to_specific_webhook(mocker, monkeypatch):
-    monkeypatch.setenv("SLACK_WEBHOOK_COMPETITORS", "https://hooks.example/comp")
-    monkeypatch.setenv("SLACK_WEBHOOK_LEADS", "https://hooks.example/leads")
+def test_every_bucket_routes_to_single_alerts_webhook(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
     calls = []
-    mocker.patch("outputs.slack.requests.post", side_effect=lambda url, **kw: calls.append(url) or _FakeResp())
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, **kw: calls.append(url) or _FakeResp())
 
-    enriched, cls = _enriched("competitor_mention")
-    channel = slack.post_alert(enriched, cls)
-    assert channel == "#reddit-competitor-watch"
-    assert calls == ["https://hooks.example/comp"]
-
-
-def test_unknown_bucket_falls_back_to_default(mocker, monkeypatch):
-    monkeypatch.setenv("SLACK_WEBHOOK_DEFAULT", "https://hooks.example/default")
-    calls = []
-    mocker.patch("outputs.slack.requests.post", side_effect=lambda url, **kw: calls.append(url) or _FakeResp())
-
-    enriched, cls = _enriched("lead_signal")  # no LEADS webhook configured
-    channel = slack.post_alert(enriched, cls)
-    assert channel == "#reddit-leads"
-    assert calls == ["https://hooks.example/default"]
+    for bucket in ("competitor_mention", "lead_signal", "icp_discussion"):
+        enriched, cls = _enriched(bucket)
+        assert slack.post_alert(enriched, cls) == "#reddit-alerts"
+    assert calls == ["https://hooks.example/alerts"] * 3
 
 
 def test_missing_webhook_skips_cleanly(mocker):
-    # No env vars set; nothing should be posted.
     called = []
-    mocker.patch("outputs.slack.requests.post", side_effect=lambda *a, **kw: called.append(1) or _FakeResp())
-    enriched, cls = _enriched("icp_discussion")
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda *a, **kw: called.append(1) or _FakeResp())
+    enriched, cls = _enriched("competitor_mention")
     assert slack.post_alert(enriched, cls) is None
     assert called == []
 
 
-def test_message_contains_title_and_link(mocker, monkeypatch):
-    monkeypatch.setenv("SLACK_WEBHOOK_COMPETITORS", "https://hooks.example/comp")
+def test_message_carries_bucket_label_and_link(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
     payloads = []
     def capture(url, json=None, **kw):
         payloads.append(json)
@@ -88,4 +74,23 @@ def test_message_contains_title_and_link(mocker, monkeypatch):
     text = payloads[0]["text"]
     assert "Chargebee is being weird today" in text
     assert "https://reddit.com/r/SaaS/comments/abc/" in text
-    assert "Competitor" in text or "competitor" in text.lower()
+    assert "Competitor Mention" in text  # bucket label still visible in single channel
+
+
+def test_digest_falls_back_to_alerts_webhook(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    calls = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, **kw: calls.append(url) or _FakeResp())
+    slack.post_digest("weekly summary")
+    assert calls == ["https://hooks.example/alerts"]
+
+
+def test_digest_prefers_dedicated_webhook_when_set(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    monkeypatch.setenv("SLACK_WEBHOOK_DIGEST", "https://hooks.example/digest")
+    calls = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, **kw: calls.append(url) or _FakeResp())
+    slack.post_digest("weekly summary")
+    assert calls == ["https://hooks.example/digest"]

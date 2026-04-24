@@ -81,14 +81,20 @@ See `supabase_schema.sql` at the project root.
 
 ## Output routing
 
-Each bucket has its own Slack webhook:
-- `competitor_mention` → `#reddit-competitor-watch`
-- `lead_signal` → `#reddit-leads`
-- `icp_discussion` → `#reddit-market-insights`
-- Weekly digest → `#reddit-digest`
-- Monitor health → `#reddit-health` (optional)
+All real-time alerts post to a single Slack channel via
+`SLACK_WEBHOOK_ALERTS`. Each message's header carries a bucket emoji + label
+(`👀 Competitor Mention`, `🎯 Lead Signal`, `📊 ICP Discussion`) so readers can
+still scan by category without splitting channels.
 
-A generic `SLACK_WEBHOOK_DEFAULT` catches any bucket without its own webhook.
+Health and digest have their own routes:
+- Weekly digest → `SLACK_WEBHOOK_DIGEST` (falls back to `SLACK_WEBHOOK_ALERTS`)
+- Per-run counters → `SLACK_WEBHOOK_HEALTH` (optional)
+
+The one-channel design is deliberate: v1 alert volume is small (estimated
+5–20 alerts/week), so separate channels would be low-signal and fragment
+attention. If volume grows enough that the single channel becomes noisy, the
+`_BUCKET_DECORATION` dict in `outputs/slack.py` is the one-file change back
+to per-bucket routing.
 
 ## Cost — v1 is $0/month
 

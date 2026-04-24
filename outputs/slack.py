@@ -4,23 +4,25 @@ import requests
 
 from models import Classification, EnrichedHit
 
-_ROUTING = {
-    "competitor_mention": ("SLACK_WEBHOOK_COMPETITORS", "#reddit-competitor-watch", "👀"),
-    "lead_signal":        ("SLACK_WEBHOOK_LEADS",       "#reddit-leads",            "🎯"),
-    "icp_discussion":     ("SLACK_WEBHOOK_ICP",         "#reddit-market-insights",  "📊"),
+_BUCKET_DECORATION = {
+    "competitor_mention": ("Competitor Mention", "👀"),
+    "lead_signal":        ("Lead Signal",        "🎯"),
+    "icp_discussion":     ("ICP Discussion",     "📊"),
 }
 
-
-def _route(bucket: str) -> tuple[str | None, str, str]:
-    env_var, channel, emoji = _ROUTING.get(bucket, (None, "#reddit-default", "🔔"))
-    url = os.environ.get(env_var) if env_var else None
-    if not url:
-        url = os.environ.get("SLACK_WEBHOOK_DEFAULT") or None
-    return url, channel, emoji
+_ALERT_CHANNEL = "#reddit-alerts"
 
 
-def _format(hit, cls: Classification, emoji: str) -> str:
-    lines = [f"{emoji} *{cls.bucket.replace('_', ' ').title()}* — r/{hit.subreddit}"]
+def _get_alert_url() -> str | None:
+    return os.environ.get("SLACK_WEBHOOK_ALERTS") or None
+
+
+def _decoration(bucket: str) -> tuple[str, str]:
+    return _BUCKET_DECORATION.get(bucket, (bucket.replace("_", " ").title(), "🔔"))
+
+
+def _format(hit, cls: Classification, label: str, emoji: str) -> str:
+    lines = [f"{emoji} *{label}* — r/{hit.subreddit}"]
     lines.append(f"*{hit.title}*")
     if hit.author:
         lines.append(f"by u/{hit.author}")
@@ -43,16 +45,19 @@ def _format(hit, cls: Classification, emoji: str) -> str:
 
 
 def post_alert(enriched: EnrichedHit, cls: Classification) -> str | None:
-    """Post to bucket-specific Slack webhook; return channel name on success, None on skip/error."""
-    url, channel, emoji = _route(cls.bucket)
+    """Post every non-noise alert to the single alerts webhook. The bucket
+    label + emoji in the message header lets readers still scan by category.
+    Returns the channel name on success, None on skip/error."""
+    url = _get_alert_url()
     if not url:
-        print(f"[slack] no webhook configured for bucket={cls.bucket}; skipping")
+        print(f"[slack] SLACK_WEBHOOK_ALERTS not set; skipping alert for {enriched.hit.post_id}")
         return None
-    payload = {"text": _format(enriched.hit, cls, emoji)}
+    label, emoji = _decoration(cls.bucket)
+    payload = {"text": _format(enriched.hit, cls, label, emoji)}
     try:
         resp = requests.post(url, json=payload, timeout=10)
         resp.raise_for_status()
-        return channel
+        return _ALERT_CHANNEL
     except Exception as e:
         print(f"[slack] post_alert error for {enriched.hit.post_id}: {e}")
         return None
@@ -70,9 +75,9 @@ def post_health(summary: str) -> None:
 
 
 def post_digest(summary: str) -> None:
-    url = os.environ.get("SLACK_WEBHOOK_DIGEST") or os.environ.get("SLACK_WEBHOOK_DEFAULT")
+    url = os.environ.get("SLACK_WEBHOOK_DIGEST") or _get_alert_url()
     if not url:
-        print("[slack] no digest webhook configured; skipping")
+        print("[slack] no digest or alerts webhook configured; skipping")
         return
     try:
         resp = requests.post(url, json={"text": summary}, timeout=10)

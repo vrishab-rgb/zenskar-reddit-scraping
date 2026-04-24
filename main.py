@@ -5,6 +5,7 @@ from collections import Counter
 import db
 from classify import bucket as bucket_mod
 from classify import relevance
+from classify.relevance import RelevanceRateLimited
 from config import (
     COMPETITOR_SEARCH_TERMS,
     INTENT_PHRASES,
@@ -38,11 +39,19 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
         return
     counters["stage1_called"] += 1
 
+    try:
+        passed = relevance.is_relevant(hit.title, hit.body)
+    except RelevanceRateLimited:
+        # Groq quota exhausted. Do NOT upsert — let this run's counter mark
+        # the event and the next run (or next UTC day) will retry.
+        counters["stage1_rate_limited"] += 1
+        return
+
     if not dry_run:
         db.upsert_hit(hit)
     counters["new_inserted"] += 1
 
-    if not relevance.is_relevant(hit.title, hit.body):
+    if not passed:
         counters["stage1_dropped"] += 1
         return
     counters["stage1_passed"] += 1
@@ -82,8 +91,8 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
 def _summary(counters: Counter) -> str:
     keys = [
         "new_inserted", "already_seen", "stage1_called", "stage1_passed", "stage1_dropped",
-        "stage1_budget_skipped", "enrich_called", "enrich_budget_skipped",
-        "yars_ok", "yars_failed",
+        "stage1_rate_limited", "stage1_budget_skipped",
+        "enrich_called", "enrich_budget_skipped", "yars_ok", "yars_failed",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
         "alerts_posted", "already_alerted",
     ]

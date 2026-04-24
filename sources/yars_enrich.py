@@ -26,7 +26,7 @@ def _ua() -> str:
 def _get_client():
     global _yars_client
     if _yars_client is None:
-        from yars.yars import YARS
+        from sources._yars_vendor.yars import YARS
         _yars_client = YARS()
     return _yars_client
 

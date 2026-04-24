@@ -4,4 +4,4 @@ python-dotenv
 groq
 pytest
 pytest-mock
-yars @ git+https://github.com/datavorous/yars.git#subdirectory=src
+urllib3

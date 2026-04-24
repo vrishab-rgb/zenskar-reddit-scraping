@@ -1,4 +1,5 @@
 import os
+import random
 import re
 import time
 from calendar import timegm
@@ -14,7 +15,19 @@ _SEARCH_URL = "https://www.reddit.com/search.rss?q={q}&sort=new&t=day"
 _SUB_URL = "https://www.reddit.com/r/{sub}/new.rss"
 _DEFAULT_UA = "zenskar-marketing-monitor/1.0 (contact: priyam.s@zenskar.com)"
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-_INTER_CALL_DELAY = 0.75  # seconds between RSS fetches; avoids Reddit burst detection
+_INTER_CALL_MIN = 1.0  # jittered delay between RSS fetches; defeats deterministic cadence detection
+_INTER_CALL_MAX = 2.5
+
+# Browser-like headers beyond just UA reduce the chance Cloudflare flags the
+# request as a scraper. Connection: close forces a fresh TCP each call, which
+# counter-intuitively looks less like one long-lived scraper session.
+_BASE_HEADERS = {
+    "Accept": "application/atom+xml, application/rss+xml, application/xml;q=0.9, */*;q=0.1",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Cache-Control": "no-cache",
+    "Connection": "close",
+}
 
 
 def _ua() -> str:
@@ -57,36 +70,44 @@ def _looks_like_html(body: str) -> bool:
     return head.startswith("<!doctype html") or head.startswith("<html")
 
 
-def _fetch_feed(url: str, max_retries: int = 3) -> list:
+def _headers() -> dict[str, str]:
+    return {"User-Agent": _ua(), **_BASE_HEADERS}
+
+
+def _fetch_feed(url: str, max_retries: int = 4) -> list:
     """Fetch via requests so we control headers, detect Reddit's anti-bot
-    HTML interstitial (status 200 + HTML body), and retry with backoff."""
-    delay = 2.0
+    HTML interstitial (status 200 + HTML body), and retry with backoff.
+    Uses jittered backoff to break deterministic retry patterns."""
+    delay = 3.0
     for attempt in range(max_retries):
         try:
             resp = requests.get(
                 url,
-                headers={
-                    "User-Agent": _ua(),
-                    "Accept": "application/atom+xml, application/rss+xml, application/xml;q=0.9, */*;q=0.1",
-                },
+                headers=_headers(),
                 timeout=20,
                 allow_redirects=True,
             )
         except Exception as e:
-            print(f"[rss] request error on {url}: {e}")
-            time.sleep(delay)
+            # ConnectionResetError, timeouts, and SSL errors all land here.
+            # Cloudflare often drops connections for a few seconds then relents —
+            # a jittered wait usually recovers on the next attempt.
+            wait = delay + random.uniform(0, delay)
+            print(f"[rss] request error on {url}: {e} (retry in {wait:.1f}s)")
+            time.sleep(wait)
             delay *= 2
             continue
 
         if resp.status_code in (429, 503):
-            print(f"[rss] {resp.status_code} on {url}; backing off {delay}s")
-            time.sleep(delay)
+            wait = delay + random.uniform(0, delay)
+            print(f"[rss] {resp.status_code} on {url}; backing off {wait:.1f}s")
+            time.sleep(wait)
             delay *= 2
             continue
 
         if _looks_like_html(resp.text):
-            print(f"[rss] HTML interstitial on {url} (likely bot detection); backing off {delay}s")
-            time.sleep(delay)
+            wait = delay + random.uniform(0, delay)
+            print(f"[rss] HTML interstitial on {url} (likely bot detection); backing off {wait:.1f}s")
+            time.sleep(wait)
             delay *= 2
             continue
 
@@ -154,9 +175,14 @@ def fetch_search(keyword: str) -> list[RedditHit]:
     return hits
 
 
+def _inter_call_sleep() -> None:
+    time.sleep(random.uniform(_INTER_CALL_MIN, _INTER_CALL_MAX))
+
+
 def fetch_all(subreddits: list[str], keywords: list[str]) -> list[RedditHit]:
     """Fetch both layers of discovery and merge by post_id, union matched keywords.
-    Paces calls with a short delay so Reddit doesn't flag the traffic as a burst."""
+    Jittered inter-call delay breaks the deterministic-cadence signal Cloudflare
+    uses to flag scraping traffic."""
     merged: dict[str, RedditHit] = {}
     endpoints = len(subreddits) + len(keywords)
     idx = 0
@@ -166,7 +192,7 @@ def fetch_all(subreddits: list[str], keywords: list[str]) -> list[RedditHit]:
                 merged[hit.post_id] = hit
         idx += 1
         if idx < endpoints:
-            time.sleep(_INTER_CALL_DELAY)
+            _inter_call_sleep()
     for kw in keywords:
         for hit in fetch_search(kw):
             existing = merged.get(hit.post_id)
@@ -178,5 +204,5 @@ def fetch_all(subreddits: list[str], keywords: list[str]) -> list[RedditHit]:
                         existing.matched_keywords.append(k)
         idx += 1
         if idx < endpoints:
-            time.sleep(_INTER_CALL_DELAY)
+            _inter_call_sleep()
     return list(merged.values())

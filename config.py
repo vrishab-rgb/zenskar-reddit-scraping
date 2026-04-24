@@ -40,3 +40,10 @@ ICP_SUBS = {
 USER_HINT_TTL_DAYS = 30
 YARS_MIN_INTERVAL_SECONDS = 6.0
 PROMPT_VERSION = "v1"
+
+# Per-run budget caps. First-run-on-empty-DB can see 500+ candidates; without
+# caps, stage-1 Groq + YARS rate-limiting can blow past the CI timeout.
+# Excess candidates are simply left for the next cron tick (they're not
+# inserted into reddit_hits, so they get reconsidered).
+MAX_STAGE1_CALLS_PER_RUN = 250
+MAX_ENRICHMENTS_PER_RUN = 20

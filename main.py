@@ -5,7 +5,13 @@ from collections import Counter
 import db
 from classify import bucket as bucket_mod
 from classify import relevance
-from config import COMPETITORS, INTENT_PHRASES, TARGET_SUBREDDITS
+from config import (
+    COMPETITORS,
+    INTENT_PHRASES,
+    MAX_ENRICHMENTS_PER_RUN,
+    MAX_STAGE1_CALLS_PER_RUN,
+    TARGET_SUBREDDITS,
+)
 from models import EnrichedHit
 from outputs import slack
 from sources import rss, yars_enrich
@@ -25,6 +31,13 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
         counters["already_seen"] += 1
         return
 
+    # Skip entirely if stage-1 budget is exhausted — and critically, do NOT
+    # insert into reddit_hits, so this post is reconsidered on the next run.
+    if counters["stage1_called"] >= MAX_STAGE1_CALLS_PER_RUN:
+        counters["stage1_budget_skipped"] += 1
+        return
+    counters["stage1_called"] += 1
+
     if not dry_run:
         db.upsert_hit(hit)
     counters["new_inserted"] += 1
@@ -38,11 +51,17 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
         print(f"[main][dry-run] would enrich + classify: {hit.post_id} — {hit.title[:80]}")
         return
 
-    enriched = yars_enrich.enrich(hit)
-    if enriched.enrichment_failed:
-        counters["yars_failed"] += 1
+    # Enrichment budget: if exhausted, classify on RSS-only context.
+    if counters["enrich_called"] >= MAX_ENRICHMENTS_PER_RUN:
+        enriched = EnrichedHit(hit=hit, enrichment_failed=True)
+        counters["enrich_budget_skipped"] += 1
     else:
-        counters["yars_ok"] += 1
+        counters["enrich_called"] += 1
+        enriched = yars_enrich.enrich(hit)
+        if enriched.enrichment_failed:
+            counters["yars_failed"] += 1
+        else:
+            counters["yars_ok"] += 1
 
     cls = bucket_mod.classify(enriched)
     db.record_classification(cls)
@@ -62,7 +81,8 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
 
 def _summary(counters: Counter) -> str:
     keys = [
-        "new_inserted", "already_seen", "stage1_passed", "stage1_dropped",
+        "new_inserted", "already_seen", "stage1_called", "stage1_passed", "stage1_dropped",
+        "stage1_budget_skipped", "enrich_called", "enrich_budget_skipped",
         "yars_ok", "yars_failed",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
         "alerts_posted", "already_alerted",

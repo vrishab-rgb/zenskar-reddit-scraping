@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>new posts</title>
+  <updated>2026-04-24T12:00:00+00:00</updated>
+  <entry>
+    <author><name>/u/alice</name></author>
+    <category term="SaaS" label="r/SaaS"/>
+    <content type="html">&lt;p&gt;We're evaluating Chargebee vs Zuora for our new B2B SaaS offering and would love feedback.&lt;/p&gt;</content>
+    <id>t3_exactmatch1</id>
+    <link href="https://www.reddit.com/r/SaaS/comments/exactmatch1/evaluating_chargebee_vs_zuora/"/>
+    <updated>2026-04-24T11:00:00+00:00</updated>
+    <published>2026-04-24T11:00:00+00:00</published>
+    <title>Evaluating Chargebee vs Zuora for B2B SaaS</title>
+  </entry>
+  <entry>
+    <author><name>/u/bob</name></author>
+    <category term="cats" label="r/cats"/>
+    <content type="html">&lt;p&gt;My cat is named Zuma.&lt;/p&gt;</content>
+    <id>t3_loosematch1</id>
+    <link href="https://www.reddit.com/r/cats/comments/loosematch1/my_cat_zuma/"/>
+    <updated>2026-04-24T10:00:00+00:00</updated>
+    <published>2026-04-24T10:00:00+00:00</published>
+    <title>My cat Zuma</title>
+  </entry>
+  <entry>
+    <author><name>/u/carol</name></author>
+    <category term="accounting" label="r/accounting"/>
+    <content type="html">&lt;p&gt;Usage-based billing is wrecking our close cycle.&lt;/p&gt;</content>
+    <id>t3_exactmatch2</id>
+    <link href="https://www.reddit.com/r/accounting/comments/exactmatch2/usage_based_billing_mess/"/>
+    <updated>2026-04-24T09:00:00+00:00</updated>
+    <published>2026-04-24T09:00:00+00:00</published>
+    <title>Usage-based billing is a mess</title>
+  </entry>
+</feed>

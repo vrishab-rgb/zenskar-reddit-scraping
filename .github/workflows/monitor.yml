@@ -1,0 +1,43 @@
+name: Reddit Monitor
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes
+  workflow_dispatch:
+
+concurrency:
+  group: reddit-monitor-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Run monitor
+        run: python main.py
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SLACK_WEBHOOK_COMPETITORS: ${{ secrets.SLACK_WEBHOOK_COMPETITORS }}
+          SLACK_WEBHOOK_LEADS: ${{ secrets.SLACK_WEBHOOK_LEADS }}
+          SLACK_WEBHOOK_ICP: ${{ secrets.SLACK_WEBHOOK_ICP }}
+          SLACK_WEBHOOK_DEFAULT: ${{ secrets.SLACK_WEBHOOK_DEFAULT }}
+          SLACK_WEBHOOK_HEALTH: ${{ secrets.SLACK_WEBHOOK_HEALTH }}
+          REDDIT_RSS_USER_AGENT: ${{ secrets.REDDIT_RSS_USER_AGENT }}

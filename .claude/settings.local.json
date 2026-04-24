@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:www.reddit.com)",
+      "WebFetch(domain:api.pullpush.io)",
+      "Bash(cd:*)",
+      "Bash(which python3:*)",
+      "Bash(python --version)",
+      "Bash(python -m pytest:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(python -m pip list:*)",
+      "Bash(python main.py:*)",
+      "Bash(python digest.py:*)",
+      "Bash(python backfill.py:*)",
+      "Bash(pip install:*)",
+      "Bash(git init)",
+      "Bash(git add:*)",
+      "Bash(git status)",
+      "Bash(git commit:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(find:*)"
+    ]
+  }
+}

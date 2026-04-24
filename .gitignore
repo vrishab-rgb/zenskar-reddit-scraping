@@ -1,0 +1,13 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+YARS.log
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+reports/*.md
+reports/*.csv
+!reports/.gitkeep

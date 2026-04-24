@@ -1,0 +1,9 @@
+{
+  "title": "Evaluating Chargebee vs Zuora for B2B SaaS",
+  "body": "We're mid-market SaaS, about 200 employees, with complex usage-based pricing. Chargebee felt too SMB. Zuora quotes came in at ~$120k/yr with a 6-month implementation. Anyone with experience on either?",
+  "comments": [
+    {"author": "finance_lead", "body": "We went with Zuora. Implementation was painful but once running it handles our complexity.", "score": 12, "replies": []},
+    {"author": "billing_nerd",  "body": "Chargebee works fine up to ~$10M ARR then starts creaking.", "score": 7,  "replies": []},
+    {"author": "random_dev",    "body": "Consider Stripe Billing if your pricing is simpler than you think.", "score": 3, "replies": []}
+  ]
+}

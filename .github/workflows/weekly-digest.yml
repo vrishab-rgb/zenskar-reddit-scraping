@@ -1,0 +1,48 @@
+name: Reddit Weekly Digest
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"   # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate digest
+        run: python digest.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SLACK_WEBHOOK_DIGEST: ${{ secrets.SLACK_WEBHOOK_DIGEST }}
+          SLACK_WEBHOOK_DEFAULT: ${{ secrets.SLACK_WEBHOOK_DEFAULT }}
+
+      - name: Commit generated digest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain reports/)" ]; then
+            git add reports/*.md
+            git commit -m "chore: weekly Reddit digest $(date -u +%Y-W%V)"
+            git push
+          else
+            echo "No digest changes to commit"
+          fi

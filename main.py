@@ -6,7 +6,7 @@ import db
 from classify import bucket as bucket_mod
 from classify import relevance
 from config import (
-    COMPETITORS,
+    COMPETITOR_SEARCH_TERMS,
     INTENT_PHRASES,
     MAX_ENRICHMENTS_PER_RUN,
     MAX_STAGE1_CALLS_PER_RUN,
@@ -19,8 +19,8 @@ from sources import rss, yars_enrich
 
 def _discover() -> list:
     print(f"[main] Layer 1 discovery: {len(TARGET_SUBREDDITS)} subs, "
-          f"{len(COMPETITORS) + len(INTENT_PHRASES)} search terms")
-    keywords = COMPETITORS + INTENT_PHRASES
+          f"{len(COMPETITOR_SEARCH_TERMS) + len(INTENT_PHRASES)} search terms")
+    keywords = COMPETITOR_SEARCH_TERMS + INTENT_PHRASES
     hits = rss.fetch_all(TARGET_SUBREDDITS, keywords)
     print(f"[main] discovered {len(hits)} unique candidates from RSS")
     return hits

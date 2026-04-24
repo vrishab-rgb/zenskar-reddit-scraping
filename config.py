@@ -7,12 +7,27 @@ TARGET_SUBREDDITS = [
     "salesforce", "netsuite", "quickbooks",
 ]
 
+# Canonical competitor names for classification + digest rollups.
 COMPETITORS = [
     "Zenskar",
     "Zuora", "Maxio", "Chargify", "SaaSOptics",
     "Stripe Billing", "Chargebee", "Recurly",
     "Ordway", "Metronome", "Tabs", "BillingPlatform",
     "Sage Intacct", "ZoneBilling",
+]
+
+# Terms we actually feed to Reddit search.rss. Some competitors need
+# disambiguation — 'Tabs' alone matches guitar tabs / browser tabs /
+# spreadsheet tabs and floods us with junk. 'Metronome' without 'billing'
+# matches music-related posts. These forms are narrower; the canonical
+# name still appears in COMPETITORS for classification/reporting.
+COMPETITOR_SEARCH_TERMS = [
+    "Zenskar",
+    "Zuora", "Maxio", "Chargify", "SaaSOptics",
+    "Stripe Billing", "Chargebee", "Recurly",
+    "Ordway", "Metronome billing", "Tabs.inc", "Tabs billing",
+    "BillingPlatform", "Billing Platform",
+    "Sage Intacct", "ZoneBilling", "Zone Billing",
 ]
 
 INTENT_PHRASES = [

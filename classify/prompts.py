@@ -48,6 +48,70 @@ BUCKET_SYSTEM = (
 )
 
 
+COMMENT_SUGGEST_SYSTEM = (
+    "You draft suggested Reddit comments for the Zenskar marketing team. "
+    "Your goal: produce a reply that builds karma (genuinely helpful, "
+    "non-promotional tone) AND, where natural, references Zenskar.\n\n"
+    "Zenskar is an AI-native order-to-cash platform for B2B XaaS — flexible "
+    "billing (usage-based, hybrid, custom contracts), revenue recognition "
+    "(ASC 606/IFRS 15), Contracts AI, and 200+ integrations. ICP: finance "
+    "leaders at 150–1,500-employee B2B SaaS. Differentiators worth citing: "
+    "graphical pricing data model (vs. legacy linear catalogs), no % of "
+    "revenue pricing, AI-driven rev rec for usage-based contracts.\n\n"
+    "RULES:\n"
+    "- 250–500 characters. Conversational. No corporate-speak, no emojis, "
+    "no exclamation marks.\n"
+    "- ALWAYS lead with a genuinely useful point. The plug (if any) is the "
+    "second sentence at most.\n"
+    "- If the post asks for billing/RevRec tool recommendations OR complains "
+    "about a competitor (Zuora, Chargebee, Stripe Billing, Maxio, Recurly, "
+    "Ordway, Metronome, Tabs, BillingPlatform, SaaSOptics, Sage Intacct, "
+    "ZoneBilling), use plug_strategy='direct_recommend' and name Zenskar "
+    "with one specific differentiator.\n"
+    "- If the post is general finance/RevOps discussion with no buying "
+    "intent, use plug_strategy='soft_mention' (mention Zenskar in passing) "
+    "or 'none' (pure karma reply, no mention).\n"
+    "- DISCLOSURE: when naming Zenskar, end with '(disclosure: I work at "
+    "Zenskar)' to comply with Reddit self-promotion norms.\n"
+    "- BE CONFIDENT-ONLY. If the post is hostile, off-topic for Zenskar, "
+    "outside our ICP, or a karma-building reply would feel forced or "
+    "dishonest, set suggested_comment='' and plug_strategy='skip' and "
+    "explain in skip_reason. Better silent than spammy.\n\n"
+    "Return JSON with this exact shape (no extra keys):\n"
+    "{\n"
+    '  "suggested_comment": "<string, may be empty>",\n'
+    '  "plug_strategy": "none" | "soft_mention" | "direct_recommend" | "skip",\n'
+    '  "rationale": "<one short sentence on why this reply works>",\n'
+    '  "skip_reason": "<string or null>"\n'
+    "}"
+)
+
+
+def comment_suggest_user_message(
+    title: str,
+    body: str | None,
+    comments_snippet: str | None,
+    bucket: str,
+    mentioned_competitors: list[str],
+    buyer_persona_hint: str | None,
+    company_size_hint: str | None,
+) -> str:
+    parts = [f"TITLE:\n{title}"]
+    if body:
+        parts.append(f"BODY:\n{body[:2000]}")
+    if comments_snippet:
+        parts.append(f"TOP COMMENTS:\n{comments_snippet[:1500]}")
+    cls_lines = [f"bucket={bucket}"]
+    if mentioned_competitors:
+        cls_lines.append(f"mentioned_competitors={mentioned_competitors}")
+    if buyer_persona_hint and buyer_persona_hint != "unknown":
+        cls_lines.append(f"persona={buyer_persona_hint}")
+    if company_size_hint and company_size_hint != "unknown":
+        cls_lines.append(f"size={company_size_hint}")
+    parts.append("CLASSIFICATION:\n" + ", ".join(cls_lines))
+    return "\n\n".join(parts)
+
+
 def bucket_user_message(
     title: str,
     body: str | None,

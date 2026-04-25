@@ -52,3 +52,13 @@ class Classification:
     pain_points: list[str] = field(default_factory=list)
     sentiment: str | None = None
     prompt_version: str = "v1"
+
+
+@dataclass
+class CommentSuggestion:
+    post_id: str
+    suggested_comment: str  # empty string when the model declines
+    plug_strategy: str  # "none" | "soft_mention" | "direct_recommend" | "skip"
+    rationale: str
+    skip_reason: str | None = None
+    prompt_version: str = "v1"

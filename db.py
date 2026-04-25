@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from config import USER_HINT_TTL_DAYS
-from models import Classification, RedditHit, UserHints
+from models import Classification, CommentSuggestion, RedditHit, UserHints
 
 _session = None
 
@@ -95,6 +95,27 @@ def record_classification(cls: Classification) -> None:
         print(f"[db] record_classification error for {cls.post_id}: {e}")
 
 
+def record_comment_suggestion(s: CommentSuggestion) -> None:
+    payload = {
+        "post_id": s.post_id,
+        "suggested_comment": s.suggested_comment,
+        "plug_strategy": s.plug_strategy,
+        "rationale": s.rationale,
+        "skip_reason": s.skip_reason,
+        "prompt_version": s.prompt_version,
+    }
+    try:
+        resp = _get_session().post(
+            _url("reddit_comment_suggestions"),
+            json=payload,
+            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[db] record_comment_suggestion error for {s.post_id}: {e}")
+
+
 def was_alerted(post_id: str) -> bool:
     try:
         resp = _get_session().get(
@@ -124,6 +145,54 @@ def mark_alerted(post_id: str, bucket: str, slack_channel: str) -> None:
         resp.raise_for_status()
     except Exception as e:
         print(f"[db] mark_alerted error for {post_id}: {e}")
+
+
+def get_groq_tokens_used_today(model: str) -> int:
+    """Return tokens already consumed today (UTC) for `model`, or 0 if no row."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        resp = _get_session().get(
+            _url("groq_daily_usage"),
+            params={
+                "model": f"eq.{model}",
+                "day_utc": f"eq.{today}",
+                "select": "tokens_used",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return int(rows[0]["tokens_used"]) if rows else 0
+    except Exception as e:
+        print(f"[db] get_groq_tokens_used_today error for {model}: {e}")
+        return 0
+
+
+def add_groq_tokens_used(model: str, additional: int) -> None:
+    """Read-then-write increment of today's row. Safe because the monitor
+    workflow has concurrency=cancel-in-progress:false (single instance at
+    a time). Runs once per cron tick at end-of-run, so the race window is
+    tiny even if that assumption ever loosens."""
+    if additional <= 0:
+        return
+    today = datetime.now(timezone.utc).date().isoformat()
+    current = get_groq_tokens_used_today(model)
+    payload = {
+        "model": model,
+        "day_utc": today,
+        "tokens_used": current + additional,
+        "updated_at": _iso(datetime.now(timezone.utc)),
+    }
+    try:
+        resp = _get_session().post(
+            _url("groq_daily_usage"),
+            json=payload,
+            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[db] add_groq_tokens_used error for {model}: {e}")
 
 
 def get_user_hints(username: str) -> UserHints | None:

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from models import Classification, EnrichedHit, RedditHit
+from models import Classification, CommentSuggestion, EnrichedHit, RedditHit
 from outputs import slack
 
 
@@ -75,6 +75,44 @@ def test_message_carries_bucket_label_and_link(mocker, monkeypatch):
     assert "Chargebee is being weird today" in text
     assert "https://reddit.com/r/SaaS/comments/abc/" in text
     assert "Competitor Mention" in text  # bucket label still visible in single channel
+
+
+def test_suggestion_block_renders_when_present(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    payloads = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, json=None, **kw: payloads.append(json) or _FakeResp())
+    enriched, cls = _enriched("lead_signal")
+    sug = CommentSuggestion(
+        post_id="t3_test",
+        suggested_comment="Worth checking Zenskar — handles usage-based contracts.",
+        plug_strategy="direct_recommend",
+        rationale="Author asked for an alternative.",
+    )
+    slack.post_alert(enriched, cls, sug)
+    text = payloads[0]["text"]
+    assert "Suggested reply" in text
+    assert "direct_recommend" in text
+    assert "Zenskar" in text
+    assert "_Why:_" in text
+
+
+def test_suggestion_block_omitted_when_skipped(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    payloads = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, json=None, **kw: payloads.append(json) or _FakeResp())
+    enriched, cls = _enriched("lead_signal")
+    sug = CommentSuggestion(
+        post_id="t3_test",
+        suggested_comment="",
+        plug_strategy="skip",
+        rationale="",
+        skip_reason="off-topic",
+    )
+    slack.post_alert(enriched, cls, sug)
+    text = payloads[0]["text"]
+    assert "Suggested reply" not in text
 
 
 def test_digest_falls_back_to_alerts_webhook(mocker, monkeypatch):

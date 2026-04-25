@@ -2,6 +2,7 @@ import os
 
 from groq import Groq
 
+from classify import groq_quota
 from classify.prompts import RELEVANCE_SYSTEM
 
 _client = None
@@ -32,7 +33,8 @@ def is_relevant(title: str, body: str | None) -> bool:
     if body:
         text += "\n\n" + body[:400]
     try:
-        resp = _get_client().chat.completions.create(
+        resp = groq_quota.chat_complete(
+            _get_client(),
             model=_MODEL,
             messages=[
                 {"role": "system", "content": RELEVANCE_SYSTEM},

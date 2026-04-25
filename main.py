@@ -4,14 +4,18 @@ from collections import Counter
 
 import db
 from classify import bucket as bucket_mod
+from classify import comment_suggest as suggest_mod
+from classify import groq_quota
 from classify import relevance
 from classify.bucket import BucketRateLimited
+from classify.comment_suggest import CommentSuggestRateLimited
 from classify.relevance import RelevanceRateLimited
 from config import (
     COMPETITOR_SEARCH_TERMS,
     INTENT_PHRASES,
     MAX_ENRICHMENTS_PER_RUN,
     MAX_STAGE1_CALLS_PER_RUN,
+    MAX_STAGE3_CALLS_PER_RUN,
     TARGET_SUBREDDITS,
 )
 from models import EnrichedHit
@@ -91,7 +95,27 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
         counters["already_alerted"] += 1
         return
 
-    channel = slack.post_alert(enriched, cls)
+    # Stage-3: draft a suggested reply for the marketing team. Best-effort —
+    # if the 8B quota is exhausted, we still post the alert without a draft
+    # rather than dropping the alert entirely.
+    suggestion = None
+    if counters["stage3_called"] >= MAX_STAGE3_CALLS_PER_RUN:
+        counters["stage3_budget_skipped"] += 1
+    else:
+        counters["stage3_called"] += 1
+        try:
+            suggestion = suggest_mod.suggest(enriched, cls)
+        except CommentSuggestRateLimited:
+            counters["stage3_rate_limited"] += 1
+            suggestion = None
+        if suggestion is not None:
+            db.record_comment_suggestion(suggestion)
+            if suggestion.suggested_comment:
+                counters[f"stage3_strategy_{suggestion.plug_strategy}"] += 1
+            else:
+                counters["stage3_skipped_by_model"] += 1
+
+    channel = slack.post_alert(enriched, cls, suggestion)
     if channel:
         db.mark_alerted(hit.post_id, cls.bucket, channel)
         counters["alerts_posted"] += 1
@@ -104,6 +128,9 @@ def _summary(counters: Counter) -> str:
         "enrich_called", "enrich_budget_skipped", "yars_ok", "yars_failed",
         "stage2_rate_limited",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
+        "stage3_called", "stage3_skipped_by_model", "stage3_rate_limited", "stage3_budget_skipped",
+        "stage3_strategy_direct_recommend", "stage3_strategy_soft_mention",
+        "stage3_strategy_none", "stage3_strategy_skip",
         "alerts_posted", "already_alerted",
     ]
     pairs = [f"{k}={counters.get(k, 0)}" for k in keys]
@@ -112,6 +139,9 @@ def _summary(counters: Counter) -> str:
 
 def run(dry_run: bool = False) -> None:
     counters: Counter = Counter()
+    # Seed daily-usage baseline from Supabase so format_summary can show
+    # accurate "tokens left today" — Groq doesn't expose this in headers.
+    groq_quota.seed_baseline_from_db()
     candidates = _discover()
     for hit in candidates:
         try:
@@ -119,7 +149,10 @@ def run(dry_run: bool = False) -> None:
         except Exception as e:
             counters["errors"] += 1
             print(f"[main] error processing {hit.post_id}: {e}")
-    summary = _summary(counters)
+    if not dry_run:
+        groq_quota.flush_usage_to_db()
+    quota = groq_quota.format_summary()
+    summary = f"{_summary(counters)}  |  {quota}"
     print(f"[main] {summary}")
 
     # Warn loudly if YARS failure rate is high this run
@@ -133,9 +166,18 @@ def run(dry_run: bool = False) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="Discover + filter but don't write or alert")
+    ap.add_argument("--probe-quota", action="store_true",
+                    help="Skip the run; just probe Groq quota for both models we use and print headroom")
     args = ap.parse_args()
     from dotenv import load_dotenv
     load_dotenv()
+    if args.probe_quota:
+        groq_quota.seed_baseline_from_db()
+        groq_quota._probe("llama-3.1-8b-instant")
+        groq_quota._probe("openai/gpt-oss-120b")
+        groq_quota.flush_usage_to_db()
+        print(groq_quota.format_summary())
+        return 0
     run(dry_run=args.dry_run)
     return 0
 

@@ -62,3 +62,8 @@ PROMPT_VERSION = "v1"
 # inserted into reddit_hits, so they get reconsidered).
 MAX_STAGE1_CALLS_PER_RUN = 250
 MAX_ENRICHMENTS_PER_RUN = 20
+# Stage-3 (comment-suggestion) is gated separately. We don't draft for noise,
+# and only a fraction of stage-2 outputs are non-noise, so this cap mostly
+# bites on first-run. 8B model has ~500K/day; 25 calls/run × 48 runs ≈
+# 1200 calls/day, comfortably under quota.
+MAX_STAGE3_CALLS_PER_RUN = 25

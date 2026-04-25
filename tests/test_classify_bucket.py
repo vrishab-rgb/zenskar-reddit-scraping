@@ -40,6 +40,40 @@ def _fake_groq_response(payload: dict):
     return SimpleNamespace(choices=[choice])
 
 
+def _fake_client(payload: dict | None = None, raise_exc: Exception | None = None):
+    """Build a fake Groq client whose with_raw_response.create returns a
+    .parse() callable + a headers mapping — matching the SDK shape we use."""
+    parsed = _fake_groq_response(payload or {})
+    headers = {"x-ratelimit-remaining-tokens": "199000",
+               "x-ratelimit-limit-tokens": "200000",
+               "x-ratelimit-reset-tokens": "8000s"}
+
+    class _RawResp:
+        def __init__(self):
+            self.headers = headers
+        def parse(self):
+            if raise_exc is not None:
+                raise raise_exc
+            return parsed
+
+    class _WithRaw:
+        @staticmethod
+        def create(**kwargs):
+            if raise_exc is not None:
+                raise raise_exc
+            return _RawResp()
+
+    class _Completions:
+        with_raw_response = _WithRaw()
+
+    class _Chat:
+        completions = _Completions()
+
+    class FakeClient:
+        chat = _Chat()
+    return FakeClient()
+
+
 def test_classify_parses_valid_json(mocker):
     payload = {
         "bucket": "competitor_mention",
@@ -49,15 +83,7 @@ def test_classify_parses_valid_json(mocker):
         "pain_points": ["usage-based rev rec"],
         "sentiment": "neu",
     }
-
-    class FakeClient:
-        class chat:
-            class completions:
-                @staticmethod
-                def create(**kwargs):
-                    return _fake_groq_response(payload)
-
-    mocker.patch.object(bucket_mod, "_get_client", return_value=FakeClient())
+    mocker.patch.object(bucket_mod, "_get_client", return_value=_fake_client(payload))
 
     cls = bucket_mod.classify(_enriched())
     assert cls.bucket == "competitor_mention"
@@ -71,28 +97,26 @@ def test_classify_parses_valid_json(mocker):
 
 def test_classify_invalid_bucket_coerced_to_noise(mocker):
     payload = {"bucket": "totally_made_up"}
-
-    class FakeClient:
-        class chat:
-            class completions:
-                @staticmethod
-                def create(**kwargs):
-                    return _fake_groq_response(payload)
-
-    mocker.patch.object(bucket_mod, "_get_client", return_value=FakeClient())
+    mocker.patch.object(bucket_mod, "_get_client", return_value=_fake_client(payload))
     cls = bucket_mod.classify(_enriched())
     assert cls.bucket == "noise"
 
 
 def test_classify_groq_error_returns_noise(mocker):
-    class BadClient:
-        class chat:
-            class completions:
-                @staticmethod
-                def create(**kwargs):
-                    raise RuntimeError("rate limit")
-
-    mocker.patch.object(bucket_mod, "_get_client", return_value=BadClient())
+    mocker.patch.object(
+        bucket_mod, "_get_client",
+        return_value=_fake_client(raise_exc=RuntimeError("internal error")),
+    )
     cls = bucket_mod.classify(_enriched())
     assert cls.bucket == "noise"
     assert cls.post_id == "t3_test"
+
+
+def test_classify_429_raises_rate_limited(mocker):
+    mocker.patch.object(
+        bucket_mod, "_get_client",
+        return_value=_fake_client(raise_exc=RuntimeError("429 rate_limit_exceeded")),
+    )
+    import pytest
+    with pytest.raises(bucket_mod.BucketRateLimited):
+        bucket_mod.classify(_enriched())

@@ -3,6 +3,7 @@ import os
 
 from groq import Groq
 
+from classify import groq_quota
 from classify.prompts import BUCKET_SYSTEM, PROMPT_VERSION, bucket_user_message
 from models import Classification, EnrichedHit
 
@@ -70,7 +71,8 @@ def classify(enriched: EnrichedHit) -> Classification:
         matched_keywords=hit.matched_keywords,
     )
     try:
-        resp = _get_client().chat.completions.create(
+        resp = groq_quota.chat_complete(
+            _get_client(),
             model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": BUCKET_SYSTEM},

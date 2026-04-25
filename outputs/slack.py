@@ -2,7 +2,7 @@ import os
 
 import requests
 
-from models import Classification, EnrichedHit
+from models import Classification, CommentSuggestion, EnrichedHit
 
 _BUCKET_DECORATION = {
     "competitor_mention": ("Competitor Mention", "👀"),
@@ -19,6 +19,17 @@ def _get_alert_url() -> str | None:
 
 def _decoration(bucket: str) -> tuple[str, str]:
     return _BUCKET_DECORATION.get(bucket, (bucket.replace("_", " ").title(), "🔔"))
+
+
+def _format_suggestion(s: CommentSuggestion) -> str | None:
+    """Render the suggestion block, or None when there's nothing useful to show."""
+    if not s.suggested_comment.strip():
+        return None
+    quoted = "\n".join(f"> {line}" for line in s.suggested_comment.splitlines())
+    lines = [f"💬 *Suggested reply* (plug: {s.plug_strategy})", quoted]
+    if s.rationale:
+        lines.append(f"_Why:_ {s.rationale}")
+    return "\n".join(lines)
 
 
 def _format(hit, cls: Classification, label: str, emoji: str) -> str:
@@ -44,16 +55,28 @@ def _format(hit, cls: Classification, label: str, emoji: str) -> str:
     return "\n".join(lines)
 
 
-def post_alert(enriched: EnrichedHit, cls: Classification) -> str | None:
+def post_alert(
+    enriched: EnrichedHit,
+    cls: Classification,
+    suggestion: CommentSuggestion | None = None,
+) -> str | None:
     """Post every non-noise alert to the single alerts webhook. The bucket
     label + emoji in the message header lets readers still scan by category.
-    Returns the channel name on success, None on skip/error."""
+    Returns the channel name on success, None on skip/error.
+
+    `suggestion` is optional: if present and non-empty, a 💬 block is appended.
+    """
     url = _get_alert_url()
     if not url:
         print(f"[slack] SLACK_WEBHOOK_ALERTS not set; skipping alert for {enriched.hit.post_id}")
         return None
     label, emoji = _decoration(cls.bucket)
-    payload = {"text": _format(enriched.hit, cls, label, emoji)}
+    text = _format(enriched.hit, cls, label, emoji)
+    if suggestion is not None:
+        block = _format_suggestion(suggestion)
+        if block:
+            text = f"{text}\n\n{block}"
+    payload = {"text": text}
     try:
         resp = requests.post(url, json=payload, timeout=10)
         resp.raise_for_status()

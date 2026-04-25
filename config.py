@@ -40,6 +40,60 @@ INTENT_PHRASES = [
     "billing software recommendations", "rev rec tool",
 ]
 
+# Real phrases CFOs / controllers / RevOps actually type when frustrated.
+# Heavy bias toward operational pain points that map to Zenskar capabilities.
+ICP_PAIN_PHRASES = [
+    # Month-end close / RevRec
+    "month-end close took", "month end close hell", "close the books",
+    "deferred revenue spreadsheet", "deferred revenue tracking",
+    "ASC 606 compliance", "IFRS 15 compliance",
+    "rev rec automation", "revenue recognition spreadsheet",
+    "unbilled revenue", "revenue waterfall",
+    # Usage / hybrid billing
+    "usage-based billing nightmare", "metered billing setup",
+    "usage data ingestion billing", "billable metrics",
+    "hybrid pricing model", "tiered usage pricing",
+    "credit-based billing", "consumption pricing",
+    # Migration / pain with current tools
+    "outgrew Stripe Billing", "outgrew Chargebee", "outgrew Zuora",
+    "migrating off Stripe Billing", "leaving Chargebee",
+    "moving off Zuora", "moved off Recurly",
+    "billing software too expensive", "% of revenue pricing",
+    # Operational / engineering pain
+    "billing engineer time", "finance ops automation",
+    "custom billing logic", "billing edge cases",
+    "subscription management mess",
+    # Buyer titles + advice
+    "CFO billing recommendation", "controller billing advice",
+    "RevOps billing tool", "FP&A revenue automation",
+    "head of finance billing", "head of revenue accounting",
+]
+
+# Auto-generated query variants. Each competitor turns into N search queries
+# covering common phrasings buyers use when they're researching alternatives.
+_COMPETITOR_VARIANT_TEMPLATES = [
+    "{x} alternative", "{x} alternatives", "alternatives to {x}",
+    "leaving {x}", "moved off {x}", "switched from {x}",
+    "{x} vs", "{x} migration", "replacing {x}",
+    "{x} sucks", "{x} is bad", "frustrated with {x}",
+    "{x} pricing complaint", "{x} doesn't support",
+]
+
+
+def _generate_competitor_variants(canonical_names: list[str]) -> list[str]:
+    """Produce 'X alternative', 'leaving X', etc. for each competitor.
+    Skips Zenskar (we don't search for our own alternatives)."""
+    out = []
+    for name in canonical_names:
+        if name.lower() == "zenskar":
+            continue
+        for tpl in _COMPETITOR_VARIANT_TEMPLATES:
+            out.append(tpl.format(x=name))
+    return out
+
+
+COMPETITOR_VARIANTS = _generate_competitor_variants(COMPETITORS)
+
 ICP_TOPICS = [
     "close the books", "month end close",
     "deferred revenue", "recognize revenue",
@@ -61,9 +115,27 @@ PROMPT_VERSION = "v1"
 # Excess candidates are simply left for the next cron tick (they're not
 # inserted into reddit_hits, so they get reconsidered).
 MAX_STAGE1_CALLS_PER_RUN = 250
-MAX_ENRICHMENTS_PER_RUN = 20
 # Stage-3 (comment-suggestion) is gated separately. We don't draft for noise,
 # and only a fraction of stage-2 outputs are non-noise, so this cap mostly
 # bites on first-run. 8B model has ~500K/day; 25 calls/run × 48 runs ≈
 # 1200 calls/day, comfortably under quota.
 MAX_STAGE3_CALLS_PER_RUN = 25
+
+# Multi-source per-run query budgets. Each query = 1 HTTP call. Tuned
+# conservatively so a single run stays under cron's 30-min ceiling and
+# under each provider's free-tier daily limit.
+MAX_HN_QUERIES_PER_RUN = 30           # Algolia: free, generous, ~10 results each
+MAX_SO_QUERIES_PER_RUN = 8            # Stack Exchange: 300/day unauthenticated
+MAX_SERPER_QUERIES_PER_RUN = 50       # serper.dev: paid; cap for predictable cost
+MAX_REDDIT_COMMENT_FEEDS_PER_RUN = 18 # one per ICP sub
+
+# Source priority — used to sort multi-source candidates before stage-1 so
+# higher-signal feeds get the LLM budget first when caps bite.
+SOURCE_PRIORITY = {
+    "google_reddit":         1.0,  # Google snippet matches body+comment text
+    "hacker_news":           0.9,
+    "reddit_comments_rss":   0.85,
+    "stackoverflow":         0.7,
+    "rss_search":            0.6,  # title-only match
+    "rss_sub":               0.4,  # broadest, weakest signal
+}

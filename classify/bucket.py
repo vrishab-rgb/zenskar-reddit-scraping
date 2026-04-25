@@ -11,6 +11,16 @@ _client = None
 _VALID_BUCKETS = {"competitor_mention", "lead_signal", "icp_discussion", "noise"}
 
 
+def _platform_for(source: str) -> tuple[str, str | None]:
+    """Map a hit's source to a (platform, channel-hint) pair the LLM can use
+    to calibrate tone and disambiguate where this came from."""
+    if source == "hacker_news":
+        return ("hacker_news", "Hacker News")
+    if source == "stackoverflow":
+        return ("stackoverflow", None)
+    return ("reddit", None)
+
+
 class BucketRateLimited(Exception):
     """Stage-2 could not run because Groq's 120B quota is exhausted. Caller
     should defer this hit (do NOT upsert, do NOT record classification) so
@@ -63,12 +73,15 @@ def _fallback_noise(post_id: str) -> Classification:
 
 def classify(enriched: EnrichedHit) -> Classification:
     hit = enriched.hit
+    platform, channel = _platform_for(hit.source)
     user_msg = bucket_user_message(
         title=hit.title,
         body=hit.body,
         comments_snippet=_comments_snippet(enriched),
         user_hint_summary=_user_hint_summary(enriched),
         matched_keywords=hit.matched_keywords,
+        platform=platform,
+        channel=channel or hit.subreddit,
     )
     try:
         resp = groq_quota.chat_complete(

@@ -6,16 +6,16 @@ from models import Classification, CommentSuggestion, EnrichedHit, RedditHit
 from outputs import slack
 
 
-def _enriched(bucket: str) -> tuple[EnrichedHit, Classification]:
+def _enriched(bucket: str, source: str = "rss_sub", subreddit: str = "SaaS") -> tuple[EnrichedHit, Classification]:
     hit = RedditHit(
         post_id="t3_test",
-        subreddit="SaaS",
+        subreddit=subreddit,
         author="alice",
         title="Chargebee is being weird today",
         body="We noticed webhook retries piling up. Anyone else seeing this?",
         permalink="https://reddit.com/r/SaaS/comments/abc/",
         created_utc=datetime.now(timezone.utc),
-        score=5, num_comments=2, source="rss_sub",
+        score=5, num_comments=2, source=source,
     )
     cls = Classification(
         post_id="t3_test",
@@ -113,6 +113,50 @@ def test_suggestion_block_omitted_when_skipped(mocker, monkeypatch):
     slack.post_alert(enriched, cls, sug)
     text = payloads[0]["text"]
     assert "Suggested reply" not in text
+
+
+def test_channel_label_for_reddit(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    payloads = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, json=None, **kw: payloads.append(json) or _FakeResp())
+    enriched, cls = _enriched("competitor_mention", source="rss_sub", subreddit="SaaS")
+    slack.post_alert(enriched, cls)
+    assert "r/SaaS" in payloads[0]["text"]
+
+
+def test_channel_label_for_hacker_news(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    payloads = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, json=None, **kw: payloads.append(json) or _FakeResp())
+    enriched, cls = _enriched("competitor_mention", source="hacker_news", subreddit="Hacker News")
+    slack.post_alert(enriched, cls)
+    first_line = payloads[0]["text"].splitlines()[0]
+    assert "Hacker News" in first_line
+    assert "r/Hacker" not in first_line  # don't render as 'r/Hacker News'
+
+
+def test_channel_label_for_stackoverflow(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    payloads = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, json=None, **kw: payloads.append(json) or _FakeResp())
+    enriched, cls = _enriched("competitor_mention", source="stackoverflow", subreddit="so:stripe-billing")
+    slack.post_alert(enriched, cls)
+    text = payloads[0]["text"]
+    assert "Stack Overflow" in text
+    assert "stripe-billing" in text
+
+
+def test_channel_label_for_reddit_comment(mocker, monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_ALERTS", "https://hooks.example/alerts")
+    payloads = []
+    mocker.patch("outputs.slack.requests.post",
+                 side_effect=lambda url, json=None, **kw: payloads.append(json) or _FakeResp())
+    enriched, cls = _enriched("competitor_mention", source="reddit_comments_rss", subreddit="CFO")
+    slack.post_alert(enriched, cls)
+    assert "r/CFO (comment)" in payloads[0]["text"]
 
 
 def test_digest_falls_back_to_alerts_webhook(mocker, monkeypatch):

@@ -30,8 +30,9 @@ def _competitor_list() -> str:
 
 
 BUCKET_SYSTEM = (
-    "You are a B2B billing-software market analyst classifying a Reddit post for "
-    "Zenskar's marketing team.\n\n"
+    "You are a B2B billing-software market analyst classifying a public-forum "
+    "post (could be Reddit, Hacker News, or Stack Overflow) for Zenskar's "
+    "marketing team.\n\n"
     "Classify the post into EXACTLY ONE bucket:\n"
     f"{_BUCKETS}\n\n"
     f"Known competitors to look for: {_competitor_list()}.\n\n"
@@ -51,11 +52,21 @@ BUCKET_SYSTEM = (
 COMMENT_PROMPT_VERSION = "v2"
 
 COMMENT_SUGGEST_SYSTEM = (
-    "You draft Reddit replies for Zenskar's marketing team. The reply must "
-    "read like a genuinely helpful comment from someone who knows the topic. "
-    "Reddit is allergic to anything that smells like marketing — if you "
-    "wouldn't post this from a personal account in a thread you actually "
-    "cared about, don't draft it.\n\n"
+    "You draft replies for Zenskar's marketing team to post on public "
+    "developer/finance forums (Reddit, Hacker News, Stack Overflow). The "
+    "reply must read like a genuinely helpful comment from someone who "
+    "knows the topic. These communities are allergic to anything that "
+    "smells like marketing — if you wouldn't post this from a personal "
+    "account in a thread you actually cared about, don't draft it.\n\n"
+
+    "PLATFORM TONE NOTES:\n"
+    "- Reddit: conversational, lowercase-leaning, lightly self-deprecating "
+    "is fine. 'we use X' phrasing reads well.\n"
+    "- Hacker News: technical, precise, no fluff. HN punishes vagueness "
+    "and rewards concrete numbers / specific experiences.\n"
+    "- Stack Overflow: focused on the technical question being asked. "
+    "Lead with the actual answer; mention Zenskar only if it solves "
+    "their specific implementation problem (and even then, soft).\n\n"
 
     "ZENSKAR — when to mention which differentiator (TOPIC FIT IS REQUIRED):\n"
     "- Usage-based / hybrid / custom pricing → graphical pricing model, "
@@ -135,8 +146,14 @@ def comment_suggest_user_message(
     mentioned_competitors: list[str],
     buyer_persona_hint: str | None,
     company_size_hint: str | None,
+    platform: str | None = None,
+    channel: str | None = None,
 ) -> str:
-    parts = [f"TITLE:\n{title}"]
+    parts = []
+    if platform:
+        loc = platform if not channel else f"{platform} ({channel})"
+        parts.append(f"PLATFORM: {loc}")
+    parts.append(f"TITLE:\n{title}")
     if body:
         parts.append(f"BODY:\n{body[:2000]}")
     if comments_snippet:
@@ -158,8 +175,14 @@ def bucket_user_message(
     comments_snippet: str | None,
     user_hint_summary: str | None,
     matched_keywords: list[str],
+    platform: str | None = None,
+    channel: str | None = None,
 ) -> str:
-    parts = [f"TITLE:\n{title}"]
+    parts = []
+    if platform:
+        loc = platform if not channel else f"{platform} ({channel})"
+        parts.append(f"PLATFORM: {loc}")
+    parts.append(f"TITLE:\n{title}")
     if body:
         parts.append(f"BODY:\n{body[:3000]}")
     if comments_snippet:

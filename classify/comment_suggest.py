@@ -33,6 +33,7 @@ def suggest(enriched: EnrichedHit, cls: Classification) -> CommentSuggestion | N
         return None
 
     hit = enriched.hit
+    platform, channel = bucket_mod._platform_for(hit.source)
     user_msg = comment_suggest_user_message(
         title=hit.title,
         body=hit.body,
@@ -41,6 +42,8 @@ def suggest(enriched: EnrichedHit, cls: Classification) -> CommentSuggestion | N
         mentioned_competitors=cls.mentioned_competitors,
         buyer_persona_hint=cls.buyer_persona_hint,
         company_size_hint=cls.company_size_hint,
+        platform=platform,
+        channel=channel or hit.subreddit,
     )
     try:
         resp = groq_quota.chat_complete(

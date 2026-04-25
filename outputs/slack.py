@@ -13,6 +13,22 @@ _BUCKET_DECORATION = {
 _ALERT_CHANNEL = "#reddit-alerts"
 
 
+def _channel_label(hit) -> str:
+    """Render the source-channel string in a way that makes sense for the
+    platform — 'r/sub' for Reddit, '🟧 Hacker News' for HN, 'SO [tag]' for
+    Stack Overflow."""
+    src = getattr(hit, "source", "") or ""
+    if src == "hacker_news":
+        return "🟧 Hacker News"
+    if src == "stackoverflow":
+        # subreddit field carries 'so:<tag>' — strip the prefix for display
+        tag = (hit.subreddit or "").removeprefix("so:") or "?"
+        return f"Stack Overflow [{tag}]"
+    if src == "reddit_comments_rss":
+        return f"r/{hit.subreddit} (comment)"
+    return f"r/{hit.subreddit}"
+
+
 def _get_alert_url() -> str | None:
     return os.environ.get("SLACK_WEBHOOK_ALERTS") or None
 
@@ -33,7 +49,7 @@ def _format_suggestion(s: CommentSuggestion) -> str | None:
 
 
 def _format(hit, cls: Classification, label: str, emoji: str) -> str:
-    lines = [f"{emoji} *{label}* — r/{hit.subreddit}"]
+    lines = [f"{emoji} *{label}* — {_channel_label(hit)}"]
     lines.append(f"*{hit.title}*")
     if hit.author:
         lines.append(f"by u/{hit.author}")

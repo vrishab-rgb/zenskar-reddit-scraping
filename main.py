@@ -12,30 +12,116 @@ from classify.comment_suggest import CommentSuggestRateLimited
 from classify.relevance import RelevanceRateLimited
 from config import (
     COMPETITOR_SEARCH_TERMS,
+    COMPETITOR_VARIANTS,
+    ICP_PAIN_PHRASES,
     INTENT_PHRASES,
-    MAX_ENRICHMENTS_PER_RUN,
+    MAX_HN_QUERIES_PER_RUN,
+    MAX_REDDIT_COMMENT_FEEDS_PER_RUN,
+    MAX_SERPER_QUERIES_PER_RUN,
+    MAX_SO_QUERIES_PER_RUN,
     MAX_STAGE1_CALLS_PER_RUN,
     MAX_STAGE3_CALLS_PER_RUN,
+    SOURCE_PRIORITY,
     TARGET_SUBREDDITS,
 )
 from models import EnrichedHit
 from outputs import slack
-from sources import rss, yars_enrich
+from sources import google_reddit, hacker_news, reddit_comments_rss, rss, stackoverflow
+
+
+def _hn_queries() -> list[str]:
+    """HN search is body+comment indexed, so simple competitor names work
+    (no need for the long auto-variant list). Pain phrases are too noisy
+    here — HN doesn't have many CFOs ranting about month-end close."""
+    return COMPETITOR_SEARCH_TERMS + [
+        p for p in INTENT_PHRASES if "vs" not in p and "alternative" not in p
+    ]
+
+
+def _serper_queries() -> list[str]:
+    """Serper sees the entire indexed Reddit. Throw the kitchen sink at it —
+    competitor variants, pain phrases, intent phrases. Each query is a paid
+    API call so MAX_SERPER_QUERIES_PER_RUN is the actual cost knob."""
+    queries = list(COMPETITOR_SEARCH_TERMS)
+    queries.extend(COMPETITOR_VARIANTS)
+    queries.extend(INTENT_PHRASES)
+    queries.extend(ICP_PAIN_PHRASES)
+    seen = set()
+    deduped = []
+    for q in queries:
+        ql = q.lower()
+        if ql in seen:
+            continue
+        seen.add(ql)
+        deduped.append(q)
+    return deduped
+
+
+def _comments_rss_keywords() -> list[str]:
+    """Comment-RSS post-filtering is client-side, so we keep the keyword
+    list small and high-precision. Competitor canonical names + tightest
+    intent phrases — anything noisier just bloats the per-feed match."""
+    return COMPETITOR_SEARCH_TERMS + INTENT_PHRASES
 
 
 def _discover() -> list:
-    print(f"[main] Layer 1 discovery: {len(TARGET_SUBREDDITS)} subs, "
-          f"{len(COMPETITOR_SEARCH_TERMS) + len(INTENT_PHRASES)} search terms")
-    keywords = COMPETITOR_SEARCH_TERMS + INTENT_PHRASES
-    hits = rss.fetch_all(TARGET_SUBREDDITS, keywords)
-    print(f"[main] discovered {len(hits)} unique candidates from RSS")
-    return hits
+    """Pull from every source, merge by post_id, sort by source priority so
+    higher-signal candidates get the LLM budget first."""
+    by_id: dict[str, object] = {}
+    counts: dict[str, int] = {}
+
+    def _ingest(source_label: str, hits: list) -> None:
+        counts[source_label] = len(hits)
+        for h in hits:
+            existing = by_id.get(h.post_id)
+            if existing is None:
+                by_id[h.post_id] = h
+            else:
+                # Same post seen from another source: union matched_keywords,
+                # promote source if the new one has higher priority.
+                for k in h.matched_keywords:
+                    if k not in existing.matched_keywords:
+                        existing.matched_keywords.append(k)
+                if SOURCE_PRIORITY.get(h.source, 0) > SOURCE_PRIORITY.get(existing.source, 0):
+                    existing.source = h.source
+
+    print(f"[main] discovery: subs={len(TARGET_SUBREDDITS)} "
+          f"reddit_search_terms={len(COMPETITOR_SEARCH_TERMS) + len(INTENT_PHRASES)}")
+    _ingest("reddit_rss", rss.fetch_all(
+        TARGET_SUBREDDITS, COMPETITOR_SEARCH_TERMS + INTENT_PHRASES,
+    ))
+
+    _ingest("reddit_comments", reddit_comments_rss.fetch_all(
+        TARGET_SUBREDDITS, _comments_rss_keywords(), MAX_REDDIT_COMMENT_FEEDS_PER_RUN,
+    ))
+
+    _ingest("hacker_news", hacker_news.fetch_all(
+        _hn_queries(), MAX_HN_QUERIES_PER_RUN,
+    ))
+
+    _ingest("stackoverflow", stackoverflow.fetch_all(MAX_SO_QUERIES_PER_RUN))
+
+    _ingest("google_reddit", google_reddit.fetch_all(
+        _serper_queries(), MAX_SERPER_QUERIES_PER_RUN,
+    ))
+
+    candidates = list(by_id.values())
+    # Sort by source priority desc — when stage-1 budget bites, we burn it
+    # on the highest-signal candidates first.
+    candidates.sort(key=lambda h: SOURCE_PRIORITY.get(h.source, 0), reverse=True)
+
+    src_breakdown = "  ".join(f"{k}={v}" for k, v in counts.items())
+    print(f"[main] discovered {len(candidates)} unique candidates  ({src_breakdown})")
+    return candidates
 
 
 def _process_one(hit, counters: Counter, dry_run: bool) -> None:
     if db.is_seen(hit.post_id):
         counters["already_seen"] += 1
         return
+
+    # Track per-source candidate flow even when stage-1 is skipped.
+    counters[f"src_{hit.source}_seen"] += 1
 
     # Skip entirely if stage-1 budget is exhausted — and critically, do NOT
     # insert into reddit_hits, so this post is reconsidered on the next run.
@@ -47,8 +133,6 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
     try:
         passed = relevance.is_relevant(hit.title, hit.body)
     except RelevanceRateLimited:
-        # Groq quota exhausted. Do NOT upsert — let this run's counter mark
-        # the event and the next run (or next UTC day) will retry.
         counters["stage1_rate_limited"] += 1
         return
 
@@ -62,27 +146,16 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
     counters["stage1_passed"] += 1
 
     if dry_run:
-        print(f"[main][dry-run] would enrich + classify: {hit.post_id} — {hit.title[:80]}")
+        print(f"[main][dry-run] would classify: {hit.post_id} ({hit.source}) — {hit.title[:80]}")
         return
 
-    # Enrichment budget: if exhausted, classify on RSS-only context.
-    if counters["enrich_called"] >= MAX_ENRICHMENTS_PER_RUN:
-        enriched = EnrichedHit(hit=hit, enrichment_failed=True)
-        counters["enrich_budget_skipped"] += 1
-    else:
-        counters["enrich_called"] += 1
-        enriched = yars_enrich.enrich(hit)
-        if enriched.enrichment_failed:
-            counters["yars_failed"] += 1
-        else:
-            counters["yars_ok"] += 1
+    # Multi-source means we no longer have an enrichment step — title+body
+    # (plus search-snippet body for google_reddit) is what stage-2 sees.
+    enriched = EnrichedHit(hit=hit, enrichment_failed=False)
 
     try:
         cls = bucket_mod.classify(enriched)
     except BucketRateLimited:
-        # Stage-2 quota exhausted. We already upserted the hit above, but
-        # skip recording a classification so the next run (post quota reset)
-        # re-runs stage-2 and fills it in.
         counters["stage2_rate_limited"] += 1
         return
 
@@ -96,8 +169,7 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
         return
 
     # Stage-3: draft a suggested reply for the marketing team. Best-effort —
-    # if the 8B quota is exhausted, we still post the alert without a draft
-    # rather than dropping the alert entirely.
+    # if the 8B quota is exhausted, we still post the alert without a draft.
     suggestion = None
     if counters["stage3_called"] >= MAX_STAGE3_CALLS_PER_RUN:
         counters["stage3_budget_skipped"] += 1
@@ -119,13 +191,14 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
     if channel:
         db.mark_alerted(hit.post_id, cls.bucket, channel)
         counters["alerts_posted"] += 1
+        counters[f"src_{hit.source}_alerted"] += 1
 
 
 def _summary(counters: Counter) -> str:
     keys = [
-        "new_inserted", "already_seen", "stage1_called", "stage1_passed", "stage1_dropped",
+        "new_inserted", "already_seen",
+        "stage1_called", "stage1_passed", "stage1_dropped",
         "stage1_rate_limited", "stage1_budget_skipped",
-        "enrich_called", "enrich_budget_skipped", "yars_ok", "yars_failed",
         "stage2_rate_limited",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
         "stage3_called", "stage3_skipped_by_model", "stage3_rate_limited", "stage3_budget_skipped",
@@ -134,13 +207,14 @@ def _summary(counters: Counter) -> str:
         "alerts_posted", "already_alerted",
     ]
     pairs = [f"{k}={counters.get(k, 0)}" for k in keys]
-    return "  ".join(pairs)
+    # Per-source visibility separately so the line stays readable.
+    src_keys = sorted(k for k in counters if k.startswith("src_"))
+    src_pairs = [f"{k}={counters[k]}" for k in src_keys]
+    return "  ".join(pairs) + (("  ||  " + "  ".join(src_pairs)) if src_pairs else "")
 
 
 def run(dry_run: bool = False) -> None:
     counters: Counter = Counter()
-    # Seed daily-usage baseline from Supabase so format_summary can show
-    # accurate "tokens left today" — Groq doesn't expose this in headers.
     groq_quota.seed_baseline_from_db()
     candidates = _discover()
     for hit in candidates:
@@ -154,13 +228,7 @@ def run(dry_run: bool = False) -> None:
     quota = groq_quota.format_summary()
     summary = f"{_summary(counters)}  |  {quota}"
     print(f"[main] {summary}")
-
-    # Warn loudly if YARS failure rate is high this run
-    attempts = counters["yars_ok"] + counters["yars_failed"]
-    if attempts >= 5 and counters["yars_failed"] / attempts > 0.5:
-        slack.post_health(f"⚠️ YARS failure rate > 50% this run: {summary}")
-    else:
-        slack.post_health(summary)
+    slack.post_health(summary)
 
 
 def main() -> int:

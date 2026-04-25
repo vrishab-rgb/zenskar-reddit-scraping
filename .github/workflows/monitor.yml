@@ -2,7 +2,10 @@ name: Reddit Monitor
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes
+    # Once daily at 04:00 UTC = 09:30 IST. Hits after Groq's 00:00 UTC
+    # daily quota reset so the run has full headroom, and lands in
+    # Slack before the team starts the workday in Bangalore/Delhi.
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 concurrency:

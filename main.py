@@ -216,8 +216,7 @@ def _summary(counters: Counter) -> str:
         "stage2_called", "stage2_rate_limited", "stage2_budget_skipped",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
         "stage3_called", "stage3_skipped_by_model", "stage3_rate_limited", "stage3_budget_skipped",
-        "stage3_strategy_direct_recommend", "stage3_strategy_soft_mention",
-        "stage3_strategy_none", "stage3_strategy_skip",
+        "stage3_strategy_soft_mention", "stage3_strategy_none", "stage3_strategy_skip",
         "alerts_posted", "already_alerted",
     ]
     pairs = [f"{k}={counters.get(k, 0)}" for k in keys]

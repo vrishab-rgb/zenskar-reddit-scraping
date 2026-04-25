@@ -16,7 +16,9 @@ from classify.prompts import (
 from models import Classification, CommentSuggestion, EnrichedHit
 
 _MODEL = "llama-3.1-8b-instant"
-_VALID_STRATEGIES = {"none", "soft_mention", "direct_recommend", "skip"}
+_VALID_STRATEGIES = {"none", "soft_mention", "skip"}
+# Map any old/invalid strategy values to the closest current one.
+_STRATEGY_ALIASES = {"direct_recommend": "soft_mention"}
 
 
 class CommentSuggestRateLimited(Exception):
@@ -74,6 +76,7 @@ def suggest(enriched: EnrichedHit, cls: Classification) -> CommentSuggestion | N
         )
 
     strategy = data.get("plug_strategy", "skip")
+    strategy = _STRATEGY_ALIASES.get(strategy, strategy)
     if strategy not in _VALID_STRATEGIES:
         strategy = "skip"
     suggested = (data.get("suggested_comment") or "").strip()

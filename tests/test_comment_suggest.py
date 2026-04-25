@@ -73,20 +73,35 @@ def test_returns_none_for_noise_bucket():
     assert out is None
 
 
-def test_direct_recommend_for_alternative_seeker(mocker):
+def test_soft_mention_for_alternative_seeker(mocker):
     payload = {
-        "suggested_comment": "If you've outgrown Chargebee on metered pricing, the issue is usually that linear price catalogs can't model usage tiers cleanly. Worth looking at Zenskar — its graphical pricing model handles hybrid usage+commit contracts without engineering work, and there's no % of revenue. (disclosure: I work at Zenskar)",
-        "plug_strategy": "direct_recommend",
-        "rationale": "Author explicitly asks for a Chargebee alternative for usage-based billing, which is a direct fit.",
+        "suggested_comment": "Chargebee's price catalog being linear is what trips up usage-heavy stacks — you end up exporting to spreadsheets to model tiered usage interacting with commits. We ended up on Zenskar for that reason and the migration was less painful than I expected.",
+        "plug_strategy": "soft_mention",
+        "rationale": "Author asks for a Chargebee alternative; soft mention with practitioner framing fits.",
         "skip_reason": None,
     }
     mocker.patch.object(bucket_mod, "_get_client", return_value=_fake_client(payload))
     out = suggest_mod.suggest(_enriched(), _cls())
     assert out is not None
-    assert out.plug_strategy == "direct_recommend"
+    assert out.plug_strategy == "soft_mention"
     assert "Zenskar" in out.suggested_comment
-    assert out.skip_reason is None
+    # No disclosure language anymore — practitioner voice, not employee.
+    assert "I work at" not in out.suggested_comment
+    assert "disclosure" not in out.suggested_comment.lower()
     assert out.post_id == "t3_sugg"
+
+
+def test_legacy_direct_recommend_aliased_to_soft_mention(mocker):
+    """Older prompt versions returned 'direct_recommend'. Coerce to
+    'soft_mention' so DB rows and counters stay clean."""
+    payload = {
+        "suggested_comment": "Some helpful advice here.",
+        "plug_strategy": "direct_recommend",
+        "rationale": "x",
+    }
+    mocker.patch.object(bucket_mod, "_get_client", return_value=_fake_client(payload))
+    out = suggest_mod.suggest(_enriched(), _cls())
+    assert out.plug_strategy == "soft_mention"
 
 
 def test_skip_when_model_declines(mocker):

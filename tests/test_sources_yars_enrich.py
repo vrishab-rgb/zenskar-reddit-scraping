@@ -31,17 +31,13 @@ def _sample_hit() -> RedditHit:
 
 
 @pytest.fixture(autouse=True)
-def _reset_client(monkeypatch):
-    monkeypatch.setattr(yars_enrich, "_yars_client", None, raising=False)
+def _reset_state(monkeypatch):
     monkeypatch.setattr(yars_enrich, "_last_call_at", 0.0, raising=False)
 
 
 def test_rate_limiter_enforces_spacing(mocker, monkeypatch):
-    # Pre-seed "last call" as if we just called YARS at t=100.0, then simulate
-    # the next call arriving 2.0s later — which is well under the 6s floor,
-    # so _throttle must sleep for 4.0s to pace us.
     monkeypatch.setattr(yars_enrich, "_last_call_at", 100.0, raising=False)
-    times = iter([102.0, 106.0])  # (a) check wait, (b) update _last_call_at
+    times = iter([102.0, 106.0])
     mocker.patch("sources.yars_enrich.time.monotonic", side_effect=lambda: next(times))
     sleeps = []
     mocker.patch("sources.yars_enrich.time.sleep", side_effect=sleeps.append)
@@ -61,12 +57,39 @@ def test_rate_limiter_skips_sleep_when_already_past_interval(mocker, monkeypatch
 
 
 def test_fetch_post_failure_returns_none(mocker):
-    class BadClient:
-        def scrape_post_details(self, permalink):
-            raise RuntimeError("cloudflare")
-    mocker.patch.object(yars_enrich, "_get_client", return_value=BadClient())
+    # Mock the underlying HTTP layer to simulate a 403 from Reddit.
+    class _Resp:
+        status_code = 403
+    mocker.patch.object(yars_enrich, "_get", return_value=_Resp())
     mocker.patch.object(yars_enrich, "_throttle", return_value=None)
     assert yars_enrich.fetch_post("/r/x/comments/y/") is None
+
+
+def test_fetch_post_happy_path(mocker):
+    """Reddit returns a 2-element list [post_listing, comment_listing].
+    fetch_post unpacks it into {title, body, comments}."""
+    reddit_payload = [
+        {"data": {"children": [
+            {"data": {"title": "Post Title", "selftext": "Post body text"}},
+        ]}},
+        {"data": {"children": [
+            {"kind": "t1", "data": {"author": "alice", "body": "first reply", "score": 5}},
+            {"kind": "t1", "data": {"author": "bob", "body": "second reply", "score": "n/a"}},
+            {"kind": "more", "data": {"id": "x"}},  # ignored
+        ]}},
+    ]
+    class _Resp:
+        status_code = 200
+        def json(self): return reddit_payload
+    mocker.patch.object(yars_enrich, "_get", return_value=_Resp())
+    mocker.patch.object(yars_enrich, "_throttle", return_value=None)
+
+    out = yars_enrich.fetch_post("/r/SaaS/comments/abc/")
+    assert out["title"] == "Post Title"
+    assert out["body"] == "Post body text"
+    assert len(out["comments"]) == 2  # 'more' kind dropped
+    assert out["comments"][0]["author"] == "alice"
+    assert out["comments"][1]["score"] is None  # non-int coerced to None
 
 
 def test_enrich_graceful_fallback_when_yars_fails(mocker):
@@ -81,19 +104,13 @@ def test_enrich_happy_path(mocker):
     post_fixture = _load("yars_post_sample.json")
     user_fixture = _load("yars_user_sample.json")
 
-    class FakeClient:
-        def scrape_post_details(self, permalink):
-            return post_fixture
-
-        def scrape_user_data(self, username, limit=50):
-            return user_fixture
-
-    mocker.patch.object(yars_enrich, "_get_client", return_value=FakeClient())
-    mocker.patch.object(yars_enrich, "_throttle", return_value=None)
+    mocker.patch.object(yars_enrich, "fetch_post", return_value=post_fixture)
+    mocker.patch.object(yars_enrich, "_fetch_user_activity", return_value=user_fixture)
     mocker.patch.object(yars_enrich, "_fetch_about", return_value={
         "created_utc": 1500000000.0,
         "total_karma": 12345,
     })
+    mocker.patch.object(yars_enrich, "_throttle", return_value=None)
     mocker.patch("sources.yars_enrich.db.get_user_hints", return_value=None)
     mocker.patch("sources.yars_enrich.db.upsert_user_hints", return_value=None)
 
@@ -108,7 +125,7 @@ def test_enrich_happy_path(mocker):
     assert hints is not None
     assert hints.total_karma == 12345
     assert hints.account_age_days is not None and hints.account_age_days > 0
-    assert hints.is_icp_likely is True  # r/accounting, r/CFO, r/FPandA present
+    assert hints.is_icp_likely is True
     assert "Chargebee" in hints.prior_competitor_mentions
     assert "Zuora" in hints.prior_competitor_mentions
 

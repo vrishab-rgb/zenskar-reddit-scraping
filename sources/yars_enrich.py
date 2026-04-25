@@ -1,4 +1,12 @@
-import os
+"""Reddit post + user enrichment via the official OAuth API.
+
+Was originally built on the vendored YARS scraper hitting www.reddit.com
+.json endpoints unauthenticated — Reddit started blocking that pattern
+from datacenter IPs (e.g. GitHub Actions) in 2023. Switched to OAuth +
+oauth.reddit.com via `sources.reddit_oauth`. Public surface is unchanged:
+`fetch_post`, `fetch_user_hints`, `enrich` keep their signatures so
+`main.py` and the digest renderer don't need to know.
+"""
 import threading
 import time
 from collections import Counter
@@ -10,35 +18,19 @@ import requests
 import db
 from config import COMPETITORS, ICP_SUBS, YARS_MIN_INTERVAL_SECONDS
 from models import Comment, EnrichedHit, RedditHit, UserHints
+from sources import reddit_oauth
 
-_yars_client = None
 _lock = threading.Lock()
 _last_call_at = 0.0
 
-_ABOUT_URL = "https://www.reddit.com/user/{u}/about.json"
-_DEFAULT_UA = "zenskar-marketing-monitor/1.0 (contact: priyam.s@zenskar.com)"
-
-
-def _ua() -> str:
-    return os.environ.get("REDDIT_RSS_USER_AGENT", _DEFAULT_UA)
-
-
-def _get_client():
-    global _yars_client
-    if _yars_client is None:
-        from sources._yars_vendor.yars import YARS
-        # Reddit returns 403 to YARS's randomized desktop User-Agents on the
-        # GitHub Actions runner — likely fingerprinted as bot traffic. Our
-        # identifying UA (used by _fetch_about) does work, so reuse it here.
-        _yars_client = YARS(random_user_agent=False)
-        _yars_client.session.headers.update({"User-Agent": _ua()})
-    return _yars_client
+_OAUTH_BASE = "https://oauth.reddit.com"
 
 
 def _throttle() -> None:
     """Global rate limiter: block until YARS_MIN_INTERVAL_SECONDS has passed
-    since the previous call. Reddit's unauthenticated .json ceiling is ~10/min;
-    we pace at ~10/min with headroom."""
+    since the previous call. Reddit's authed limit is ~100 req/min; we keep
+    the same conservative 6s spacing because comment+user fetches each
+    burst 3 calls per post and we don't want to chew quota."""
     global _last_call_at
     with _lock:
         wait = YARS_MIN_INTERVAL_SECONDS - (time.monotonic() - _last_call_at)
@@ -48,45 +40,115 @@ def _throttle() -> None:
 
 
 def _permalink_path(permalink: str) -> str:
-    """YARS expects a path like '/r/sub/comments/xyz/'. Accept full URLs too."""
+    """Reddit OAuth expects a path like '/r/sub/comments/xyz/'. Accept
+    full URLs too."""
     if permalink.startswith("http"):
         return urlparse(permalink).path
     return permalink
 
 
-def fetch_post(permalink: str) -> dict | None:
-    _throttle()
+def _get(url: str, params: dict | None = None) -> requests.Response | None:
+    """Single-attempt GET against oauth.reddit.com with bearer auth.
+    Returns None on auth failure or non-200; the caller decides how to
+    degrade (most paths fall back to RSS-only enrichment)."""
     try:
-        return _get_client().scrape_post_details(_permalink_path(permalink))
-    except Exception as e:
-        print(f"[yars] fetch_post error for {permalink}: {e}")
+        return requests.get(
+            url,
+            headers=reddit_oauth.auth_headers(),
+            params=params or {},
+            timeout=15,
+        )
+    except reddit_oauth.RedditAuthError as e:
+        print(f"[reddit] auth failed (set REDDIT_CLIENT_ID/SECRET/USERNAME/PASSWORD): {e}")
         return None
+    except Exception as e:
+        print(f"[reddit] GET {url} error: {e}")
+        return None
+
+
+def _extract_comments(children) -> list[dict]:
+    """Walk Reddit's nested t1 comment listing into a flat dict shape that
+    `_comments_from_yars` knows how to consume. We don't recurse into
+    replies — top-level signal is enough for classification."""
+    out: list[dict] = []
+    for c in children or []:
+        if isinstance(c, dict) and c.get("kind") == "t1":
+            d = c.get("data", {}) or {}
+            score = d.get("score")
+            if not isinstance(score, int):
+                score = None
+            out.append({
+                "author": d.get("author") or "",
+                "body": d.get("body") or "",
+                "score": score,
+            })
+    return out
+
+
+def fetch_post(permalink: str) -> dict | None:
+    """GET the post .json via oauth.reddit.com. Returns
+    {title, body, comments} on success, None on any failure."""
+    _throttle()
+    path = _permalink_path(permalink).rstrip("/")
+    url = f"{_OAUTH_BASE}{path}.json"
+    resp = _get(url)
+    if resp is None or resp.status_code != 200:
+        status = resp.status_code if resp is not None else "no-response"
+        print(f"[reddit] fetch_post {permalink}: status={status}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        print(f"[reddit] fetch_post {permalink}: bad JSON")
+        return None
+    if not isinstance(data, list) or len(data) < 2:
+        return None
+    try:
+        main_post = data[0]["data"]["children"][0]["data"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    return {
+        "title": main_post.get("title", ""),
+        "body": main_post.get("selftext", "") or "",
+        "comments": _extract_comments(data[1].get("data", {}).get("children", [])),
+    }
 
 
 def _fetch_about(username: str) -> dict | None:
     _throttle()
+    url = f"{_OAUTH_BASE}/user/{username}/about"
+    resp = _get(url)
+    if resp is None or resp.status_code != 200:
+        return None
     try:
-        resp = requests.get(
-            _ABOUT_URL.format(u=username),
-            headers={"User-Agent": _ua()},
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return None
         return resp.json().get("data")
-    except Exception as e:
-        print(f"[yars] fetch_about error for {username}: {e}")
+    except ValueError:
         return None
 
 
 def _fetch_user_activity(username: str, limit: int = 50) -> list[dict]:
+    """Recent posts + comments from this user. Same shape as the legacy
+    YARS dict so downstream parsing is unchanged."""
     _throttle()
-    try:
-        items = _get_client().scrape_user_data(username, limit=limit)
-        return items or []
-    except Exception as e:
-        print(f"[yars] scrape_user_data error for {username}: {e}")
+    url = f"{_OAUTH_BASE}/user/{username}/.json"
+    resp = _get(url, params={"limit": limit})
+    if resp is None or resp.status_code != 200:
         return []
+    try:
+        data = resp.json()
+    except ValueError:
+        return []
+    items = data.get("data", {}).get("children", []) or []
+    out: list[dict] = []
+    for item in items:
+        kind = item.get("kind")
+        d = item.get("data", {}) or {}
+        sub = d.get("subreddit", "") or ""
+        if kind == "t3":
+            out.append({"title": d.get("title", "") or "", "subreddit": sub, "body": ""})
+        elif kind == "t1":
+            out.append({"title": "", "subreddit": sub, "body": d.get("body", "") or ""})
+    return out
 
 
 def fetch_user_hints(username: str) -> UserHints | None:
@@ -154,9 +216,9 @@ def _comments_from_yars(raw: list[dict]) -> list[Comment]:
 
 
 def enrich(hit: RedditHit) -> EnrichedHit:
-    """Fetch full post body + top-level comments + user hints.
-    On any failure, return EnrichedHit with enrichment_failed=True so the
-    caller can fall back to RSS-only classification."""
+    """Fetch full post body + top-level comments + user hints. On any
+    failure, return EnrichedHit with enrichment_failed=True so the caller
+    can fall back to RSS-only classification."""
     post = fetch_post(hit.permalink)
     if post is None:
         return EnrichedHit(hit=hit, enrichment_failed=True)

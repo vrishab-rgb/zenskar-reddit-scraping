@@ -73,15 +73,19 @@ class YARS:
     def scrape_post_details(self, permalink):
         url = f"https://www.reddit.com{permalink}.json"
 
+        response = None
         try:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
-            logging.info("Post details request successful : %s", url)
+            logging.info("Post details request successful: %s", url)
         except Exception as e:
-            logging.info("Post details request unsccessful: %e", e)
-            if response.status_code != 200:
-                print(f"Failed to fetch post data: {response.status_code}")
-                return None
+            # Was '%e' — that's a scientific-notation FLOAT spec, which
+            # crashes when applied to an HTTPError and emits a noisy
+            # 'Logging error' traceback. '%s' renders any object safely.
+            logging.info("Post details request unsuccessful: %s", e)
+            status = response.status_code if response is not None else "no-response"
+            print(f"Failed to fetch post data: {status}")
+            return None
 
         post_data = response.json()
         if not isinstance(post_data, list) or len(post_data) < 2:

@@ -27,7 +27,11 @@ def _get_client():
     global _yars_client
     if _yars_client is None:
         from sources._yars_vendor.yars import YARS
-        _yars_client = YARS()
+        # Reddit returns 403 to YARS's randomized desktop User-Agents on the
+        # GitHub Actions runner — likely fingerprinted as bot traffic. Our
+        # identifying UA (used by _fetch_about) does work, so reuse it here.
+        _yars_client = YARS(random_user_agent=False)
+        _yars_client.session.headers.update({"User-Agent": _ua()})
     return _yars_client
 
 

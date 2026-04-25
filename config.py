@@ -115,6 +115,11 @@ PROMPT_VERSION = "v1"
 # Excess candidates are simply left for the next cron tick (they're not
 # inserted into reddit_hits, so they get reconsidered).
 MAX_STAGE1_CALLS_PER_RUN = 250
+# Stage-2 uses the 120B model which has a much smaller daily token bucket
+# (~200K/day). One run can chew 130K of it on a fat candidate set, so cap
+# stage-2 calls explicitly. Hits beyond this are dropped without a
+# classification — they get reconsidered next run after partial quota refill.
+MAX_STAGE2_CALLS_PER_RUN = 80
 # Stage-3 (comment-suggestion) is gated separately. We don't draft for noise,
 # and only a fraction of stage-2 outputs are non-noise, so this cap mostly
 # bites on first-run. 8B model has ~500K/day; 25 calls/run × 48 runs ≈

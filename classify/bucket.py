@@ -91,7 +91,7 @@ def classify(enriched: EnrichedHit) -> Classification:
                 {"role": "system", "content": BUCKET_SYSTEM},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=500,
+            max_tokens=800,
             temperature=0,
             response_format={"type": "json_object"},
         )

@@ -4,14 +4,21 @@ The regular sub RSS only gives us new POSTS. This module pulls the
 comments-only RSS (Reddit exposes /r/<sub>/comments/.rss as a separate
 feed) so we catch in-thread mentions: a CFO replying 'yeah we left
 Chargebee for similar reasons' in someone else's thread is invisible to
-the post-only feeds. Filtered post-fetch by keyword presence — Reddit
-doesn't let us search comments via RSS.
+the post-only feeds.
 
-Each matching comment is normalized to a RedditHit with the COMMENT'S
-URL as permalink (so Slack alerts deep-link straight to the comment),
-and the post_id namespaced as 't1_<comment_id>' — distinct from the
-'_t3_' post namespace, so a post AND its comment can both alert
-without collision.
+LESSON LEARNED: keyword-filtering comments by competitor name returns
+~zero matches because comment bodies rarely mention the topic-word
+('we left them' doesn't contain 'Chargebee' even when discussing
+Chargebee). So we now stream ALL comments through to stage-1 from the
+specific ICP subs we care about — let the LLM relevance filter decide.
+The 18 ICP subs are themselves the topical pre-filter; everything in
+r/CFO is at least loosely finance-relevant.
+
+Each comment is normalized to a RedditHit with the COMMENT'S URL as
+permalink (so Slack alerts deep-link straight to the comment), and the
+post_id namespaced as 't1_<comment_id>' — distinct from the 't3_'
+post namespace, so a post AND its comment can both alert without
+collision.
 """
 import random
 import re
@@ -67,30 +74,24 @@ def _entry_to_hit(entry, sub: str, matched: list[str]) -> RedditHit | None:
     )
 
 
-def fetch_subreddit_comments(sub: str, keywords: list[str]) -> list[RedditHit]:
-    """Pull the comments feed for one sub. Post-filter by keyword presence in
-    title or body. Reddit doesn't expose comment search, so we have to do
-    the matching client-side — cheap, since each feed is small."""
-    keywords_lower = {k.lower() for k in keywords}
+def fetch_subreddit_comments(sub: str, keywords: list[str] | None = None) -> list[RedditHit]:
+    """Pull the comments feed for one sub. We DON'T filter by keyword here
+    anymore — comment bodies usually don't mention the topic-word, so
+    keyword filtering produced ~zero hits. Streaming everything is fine
+    because the 18 ICP subs are themselves the pre-filter. `keywords` is
+    accepted for API compatibility but ignored."""
     url = _COMMENTS_URL.format(sub=sub)
     out: list[RedditHit] = []
-    for entry in _fetch_feed(url):
-        title = getattr(entry, "title", "") or ""
-        summary = _strip_html(getattr(entry, "summary", ""))
-        haystack = f"{title}\n{summary}".lower()
-        matched = [k for k in keywords_lower if k in haystack]
-        if not matched:
-            continue
-        # Re-canonicalize matched against original casing so downstream
-        # logs/competitor lookups stay readable.
-        canon = [k for k in keywords if k.lower() in matched]
-        hit = _entry_to_hit(entry, sub, matched=canon)
+    entries = _fetch_feed(url)
+    for entry in entries:
+        hit = _entry_to_hit(entry, sub, matched=[])
         if hit:
             out.append(hit)
+    print(f"[reddit_comments] r/{sub}: {len(entries)} comments fetched, {len(out)} valid")
     return out
 
 
-def fetch_all(subreddits: list[str], keywords: list[str], max_feeds: int) -> list[RedditHit]:
+def fetch_all(subreddits: list[str], keywords: list[str] | None, max_feeds: int) -> list[RedditHit]:
     """One feed per subreddit, up to max_feeds. Inter-call jitter avoids
     looking like deterministic scraping traffic."""
     merged: dict[str, RedditHit] = {}
@@ -102,10 +103,6 @@ def fetch_all(subreddits: list[str], keywords: list[str], max_feeds: int) -> lis
             existing = merged.get(hit.post_id)
             if existing is None:
                 merged[hit.post_id] = hit
-            else:
-                for k in hit.matched_keywords:
-                    if k not in existing.matched_keywords:
-                        existing.matched_keywords.append(k)
         used += 1
         if used < max_feeds:
             time.sleep(random.uniform(1.0, 2.5))

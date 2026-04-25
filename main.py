@@ -20,6 +20,7 @@ from config import (
     MAX_SERPER_QUERIES_PER_RUN,
     MAX_SO_QUERIES_PER_RUN,
     MAX_STAGE1_CALLS_PER_RUN,
+    MAX_STAGE2_CALLS_PER_RUN,
     MAX_STAGE3_CALLS_PER_RUN,
     SOURCE_PRIORITY,
     TARGET_SUBREDDITS,
@@ -160,6 +161,12 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
     # (plus search-snippet body for google_reddit) is what stage-2 sees.
     enriched = EnrichedHit(hit=hit, enrichment_failed=False)
 
+    # Stage-2 budget — protects the 120B daily token bucket.
+    if counters["stage2_called"] >= MAX_STAGE2_CALLS_PER_RUN:
+        counters["stage2_budget_skipped"] += 1
+        return
+    counters["stage2_called"] += 1
+
     try:
         cls = bucket_mod.classify(enriched)
     except BucketRateLimited:
@@ -206,7 +213,7 @@ def _summary(counters: Counter) -> str:
         "new_inserted", "already_seen",
         "stage1_called", "stage1_passed", "stage1_dropped",
         "stage1_rate_limited", "stage1_budget_skipped",
-        "stage2_rate_limited",
+        "stage2_called", "stage2_rate_limited", "stage2_budget_skipped",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
         "stage3_called", "stage3_skipped_by_model", "stage3_rate_limited", "stage3_budget_skipped",
         "stage3_strategy_direct_recommend", "stage3_strategy_soft_mention",

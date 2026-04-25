@@ -15,7 +15,9 @@ def test_comment_id_extraction():
     assert reddit_comments_rss._comment_id_from_link(link) == "def456"
 
 
-def test_comment_match_filters_by_keyword(mocker):
+def test_no_keyword_filter_streams_everything_through(mocker):
+    """Comment-RSS no longer pre-filters by keyword — comment bodies
+    rarely mention topic-words, so we let stage-1 LLM filter relevance."""
     entries = [
         _entry("https://www.reddit.com/r/SaaS/comments/aaa/slug/c1/",
                title="thoughts on Chargebee?",
@@ -26,13 +28,12 @@ def test_comment_match_filters_by_keyword(mocker):
     ]
     mocker.patch.object(reddit_comments_rss, "_fetch_feed", return_value=entries)
     hits = reddit_comments_rss.fetch_subreddit_comments("SaaS", ["Chargebee", "Zuora"])
-    assert len(hits) == 1
-    h = hits[0]
-    assert h.post_id == "t1_c1"   # comment namespace
-    assert h.subreddit == "SaaS"
-    assert h.source == "reddit_comments_rss"
-    assert h.matched_keywords == ["Chargebee"]
-    assert h.permalink.endswith("/c1/")
+    assert len(hits) == 2  # both pass through, regardless of keyword presence
+    assert {h.post_id for h in hits} == {"t1_c1", "t1_c2"}
+    for h in hits:
+        assert h.subreddit == "SaaS"
+        assert h.source == "reddit_comments_rss"
+        assert h.matched_keywords == []  # no keyword tagging anymore
 
 
 def test_post_id_collision_safe_with_post_namespace(mocker):

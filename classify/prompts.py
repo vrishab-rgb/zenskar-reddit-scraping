@@ -14,14 +14,19 @@ RELEVANCE_SYSTEM = (
 )
 
 _BUCKETS = (
-    "- competitor_mention: discusses a named billing/RevOps/accounting vendor "
-    "(see competitor list) in a way that might inform marketing intelligence.\n"
+    "- competitor_mention: discusses a named vendor in a way that informs "
+    "marketing intelligence — comparisons, complaints, evaluations, "
+    "migrations, recommendations, pricing rants. NOT routine integration "
+    "or how-to questions ('how do I add a webhook in Chargebee', "
+    "'Stripe Billing API returns 500'). Those are NOISE — they tell us "
+    "nothing about buying behavior.\n"
     "- lead_signal: author is asking for recommendations, alternatives, or help "
     "choosing a billing / rev-rec / usage-pricing tool — prospect-like intent.\n"
     "- icp_discussion: a finance persona (CFO, Controller, FPA, RevOps, Head of "
     "Billing) discussing pain points without necessarily naming a vendor — useful "
-    "for qualitative market insight.\n"
-    "- noise: not useful for any of the above."
+    "for qualitative market insight. Engineering integration questions are NOT "
+    "icp_discussion.\n"
+    "- noise: not useful for any of the above. Default here when uncertain."
 )
 
 

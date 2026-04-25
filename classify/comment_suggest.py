@@ -9,8 +9,8 @@ import json
 from classify import bucket as bucket_mod
 from classify import groq_quota
 from classify.prompts import (
+    COMMENT_PROMPT_VERSION,
     COMMENT_SUGGEST_SYSTEM,
-    PROMPT_VERSION,
     comment_suggest_user_message,
 )
 from models import Classification, CommentSuggestion, EnrichedHit
@@ -67,7 +67,7 @@ def suggest(enriched: EnrichedHit, cls: Classification) -> CommentSuggestion | N
             plug_strategy="skip",
             rationale="",
             skip_reason=f"groq_error: {msg[:120]}",
-            prompt_version=PROMPT_VERSION,
+            prompt_version=COMMENT_PROMPT_VERSION,
         )
 
     strategy = data.get("plug_strategy", "skip")
@@ -90,5 +90,5 @@ def suggest(enriched: EnrichedHit, cls: Classification) -> CommentSuggestion | N
         plug_strategy=strategy,
         rationale=(data.get("rationale") or "").strip(),
         skip_reason=skip_reason,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=COMMENT_PROMPT_VERSION,
     )

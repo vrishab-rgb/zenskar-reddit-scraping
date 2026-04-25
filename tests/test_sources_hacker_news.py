@@ -22,8 +22,18 @@ def test_story_match_becomes_redditish_hit(mocker):
         "num_comments": 23,
         "created_at_i": 1700000000,
     }]}
-    mocker.patch("sources.hacker_news.requests.get", return_value=_Resp(payload))
+    captured = {}
+    def _capture_get(url, params=None, **kw):
+        captured["url"] = url
+        captured["params"] = params
+        return _Resp(payload)
+    mocker.patch("sources.hacker_news.requests.get", side_effect=_capture_get)
     hits = hacker_news.fetch_query("Chargebee alternative")
+    # Verify we hit the date-sorted endpoint, not the relevance-sorted one
+    assert captured["url"].endswith("/search_by_date")
+    # And applied a freshness filter
+    assert "numericFilters" in captured["params"]
+    assert captured["params"]["numericFilters"].startswith("created_at_i>")
     assert len(hits) == 1
     h = hits[0]
     assert h.post_id == "hn:42424242"

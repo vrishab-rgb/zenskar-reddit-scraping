@@ -30,12 +30,19 @@ from sources import google_reddit, hacker_news, reddit_comments_rss, rss, stacko
 
 
 def _hn_queries() -> list[str]:
-    """HN search is body+comment indexed, so simple competitor names work
-    (no need for the long auto-variant list). Pain phrases are too noisy
-    here — HN doesn't have many CFOs ranting about month-end close."""
-    return COMPETITOR_SEARCH_TERMS + [
-        p for p in INTENT_PHRASES if "vs" not in p and "alternative" not in p
+    """HN queries are intentionally narrow. Algolia returns ANY HN
+    content matching the term in the last 72h — generic phrases like
+    'usage-based billing' surface dozens of unrelated tangents. Keep the
+    list to high-precision terms that almost always indicate buyer-relevant
+    discussion: competitor names, and the most concrete intent signals."""
+    high_precision_intent = [
+        "usage-based billing",
+        "metered billing",
+        "subscription billing platform",
+        "revenue recognition software",
+        "billing automation platform",
     ]
+    return COMPETITOR_SEARCH_TERMS + high_precision_intent
 
 
 def _serper_queries() -> list[str]:

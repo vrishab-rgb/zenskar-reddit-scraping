@@ -131,11 +131,17 @@ MAX_REDDIT_COMMENT_FEEDS_PER_RUN = 18 # one per ICP sub
 
 # Source priority — used to sort multi-source candidates before stage-1 so
 # higher-signal feeds get the LLM budget first when caps bite.
+#
+# Logic: pre-filtered + ICP-context-restricted sources rank highest because
+# their candidates are usually relevant before stage-1 even sees them. HN
+# ranks below comments-RSS because HN search is full-text without any
+# domain pre-filter — a "Chargebee" query catches every HN story mentioning
+# Chargebee, including offhand mentions in unrelated threads.
 SOURCE_PRIORITY = {
-    "google_reddit":         1.0,  # Google snippet matches body+comment text
-    "hacker_news":           0.9,
-    "reddit_comments_rss":   0.85,
-    "stackoverflow":         0.7,
-    "rss_search":            0.6,  # title-only match
-    "rss_sub":               0.4,  # broadest, weakest signal
+    "google_reddit":         1.0,   # SERP snippet contains exact match text
+    "reddit_comments_rss":   0.85,  # keyword pre-filtered, in ICP subs only
+    "hacker_news":           0.75,  # broad full-text match, less signal density
+    "stackoverflow":         0.7,   # tag-restricted; narrow domain
+    "rss_search":            0.6,   # title-only match
+    "rss_sub":               0.4,   # broadest, weakest signal
 }

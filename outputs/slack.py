@@ -48,11 +48,22 @@ def _format_suggestion(s: CommentSuggestion) -> str | None:
     return "\n".join(lines)
 
 
+def _author_label(hit) -> str | None:
+    if not hit.author:
+        return None
+    src = getattr(hit, "source", "") or ""
+    if src.startswith("reddit") or src in ("rss_sub", "rss_search"):
+        return f"by u/{hit.author}"
+    # HN / SO / generic — bare username, no u/ prefix.
+    return f"by {hit.author}"
+
+
 def _format(hit, cls: Classification, label: str, emoji: str) -> str:
     lines = [f"{emoji} *{label}* — {_channel_label(hit)}"]
     lines.append(f"*{hit.title}*")
-    if hit.author:
-        lines.append(f"by u/{hit.author}")
+    author = _author_label(hit)
+    if author:
+        lines.append(author)
     snippet = (hit.body or "").strip().replace("\n", " ")[:300]
     if snippet:
         lines.append(f"> {snippet}")

@@ -5,20 +5,33 @@ founders evaluating billing infra, RevOps engineers). Algolia indexes
 both stories AND comments, so we catch in-thread mentions for free.
 No auth required, generous rate limits, returns JSON.
 
+Critical config: we use `/search_by_date` (NOT `/search`) so results
+come back newest-first, AND apply a 72-hour numeric filter — otherwise
+the relevance sort dredges up high-karma 2018 stories about Chargebee
+that aren't actionable. Marketing wants signals from the last few days,
+not lifetime mentions.
+
 Each match is normalized to a `RedditHit` (with subreddit='Hacker News'
 and source='hacker_news') so the rest of the pipeline doesn't need to
 know about platform differences.
 """
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
 from models import RedditHit
 
-_API = "https://hn.algolia.com/api/v1/search"
+# search_by_date sorts newest-first; relevance sort (the default /search
+# endpoint) buries fresh signal under high-karma archived stories.
+_API = "https://hn.algolia.com/api/v1/search_by_date"
 _ITEM_URL = "https://news.ycombinator.com/item?id={id}"
 _INTER_CALL_SLEEP = 0.5  # Algolia is generous; keep it polite anyway.
+
+# Only surface posts/comments from the last N hours. Tunable — for a
+# weekly "best of" mode we'd raise this; for live alerts, fresh is the
+# whole point.
+_FRESHNESS_HOURS = 72
 
 
 def _entry_to_hit(item: dict, query: str) -> RedditHit | None:
@@ -65,14 +78,21 @@ def _entry_to_hit(item: dict, query: str) -> RedditHit | None:
     )
 
 
-def fetch_query(query: str, hits_per_page: int = 20) -> list[RedditHit]:
-    """One Algolia search. Searches both story and comment text. Returns
-    up to `hits_per_page` results sorted by relevance."""
+def fetch_query(query: str, hits_per_page: int = 15) -> list[RedditHit]:
+    """One Algolia search. Searches both story AND comment text on HN.
+    Returns up to `hits_per_page` results sorted newest-first AND filtered
+    to the last `_FRESHNESS_HOURS` hours — so we only surface signals
+    that are actually still actionable."""
+    cutoff = int((datetime.now(timezone.utc) - timedelta(hours=_FRESHNESS_HOURS)).timestamp())
     try:
         resp = requests.get(
             _API,
-            params={"query": query, "hitsPerPage": hits_per_page,
-                    "tags": "(story,comment)"},
+            params={
+                "query": query,
+                "hitsPerPage": hits_per_page,
+                "tags": "(story,comment)",
+                "numericFilters": f"created_at_i>{cutoff}",
+            },
             timeout=15,
         )
         resp.raise_for_status()

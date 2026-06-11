@@ -113,6 +113,47 @@ def post_alert(
         return None
 
 
+def post_reddit_post_draft(
+    title: str,
+    body: str,
+    subreddit: str | None = None,
+    source_url: str | None = None,
+    notes: str | None = None,
+) -> str | None:
+    """Deliver a canonical Reddit POST draft (long-form, written by Cowork) to
+    Slack for review before a human posts it from a founder/nurture account.
+
+    Routes to SLACK_WEBHOOK_POSTS if set, else falls back to the alerts webhook.
+    Returns the webhook used on success, None on skip/error.
+    """
+    url = os.environ.get("SLACK_WEBHOOK_POSTS") or _get_alert_url()
+    if not url:
+        print("[slack] no posts/alerts webhook configured; skipping post draft")
+        return None
+
+    header = "📝 *Canonical post draft*"
+    if subreddit:
+        header += f" — suggested r/{subreddit}"
+    lines = [header, f"*{title}*", "", body.strip()]
+    meta = []
+    if source_url:
+        meta.append(f"<{source_url}|source page>")
+    if notes:
+        meta.append(notes)
+    if meta:
+        lines.append("")
+        lines.append("_" + " · ".join(meta) + "_")
+    lines.append("\n⚠️ disclosed founder/nurture account only · not auto-posted")
+
+    try:
+        resp = requests.post(url, json={"text": "\n".join(lines)}, timeout=10)
+        resp.raise_for_status()
+        return url
+    except Exception as e:
+        print(f"[slack] post_reddit_post_draft error: {e}")
+        return None
+
+
 def post_health(summary: str) -> None:
     url = os.environ.get("SLACK_WEBHOOK_HEALTH")
     if not url:

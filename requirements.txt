@@ -5,3 +5,7 @@ groq
 pytest
 pytest-mock
 urllib3
+google-genai          # Gemini drafter (engage/drafter.py)
+# Poster-only deps. Installed on the local posting host, not in CI:
+#   pip install playwright && python -m playwright install chromium
+playwright

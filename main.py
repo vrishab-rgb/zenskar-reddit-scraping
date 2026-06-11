@@ -4,11 +4,9 @@ from collections import Counter
 
 import db
 from classify import bucket as bucket_mod
-from classify import comment_suggest as suggest_mod
 from classify import groq_quota
 from classify import relevance
 from classify.bucket import BucketRateLimited
-from classify.comment_suggest import CommentSuggestRateLimited
 from classify.relevance import RelevanceRateLimited
 from config import (
     COMPETITOR_SEARCH_TERMS,
@@ -21,7 +19,6 @@ from config import (
     MAX_SO_QUERIES_PER_RUN,
     MAX_STAGE1_CALLS_PER_RUN,
     MAX_STAGE2_CALLS_PER_RUN,
-    MAX_STAGE3_CALLS_PER_RUN,
     SOURCE_PRIORITY,
     TARGET_SUBREDDITS,
 )
@@ -182,26 +179,11 @@ def _process_one(hit, counters: Counter, dry_run: bool) -> None:
         counters["already_alerted"] += 1
         return
 
-    # Stage-3: draft a suggested reply for the marketing team. Best-effort —
-    # if the 8B quota is exhausted, we still post the alert without a draft.
-    suggestion = None
-    if counters["stage3_called"] >= MAX_STAGE3_CALLS_PER_RUN:
-        counters["stage3_budget_skipped"] += 1
-    else:
-        counters["stage3_called"] += 1
-        try:
-            suggestion = suggest_mod.suggest(enriched, cls)
-        except CommentSuggestRateLimited:
-            counters["stage3_rate_limited"] += 1
-            suggestion = None
-        if suggestion is not None:
-            db.record_comment_suggestion(suggestion)
-            if suggestion.suggested_comment:
-                counters[f"stage3_strategy_{suggestion.plug_strategy}"] += 1
-            else:
-                counters["stage3_skipped_by_model"] += 1
-
-    channel = slack.post_alert(enriched, cls, suggestion)
+    # No draft is generated here anymore: the weak-model (Groq 8B) comment
+    # drafting was removed. Claude drafts replies downstream from the
+    # classified candidates surfaced via the marketing MCP. The pipeline's job
+    # ends at discover -> filter -> classify -> alert.
+    channel = slack.post_alert(enriched, cls)
     if channel:
         db.mark_alerted(hit.post_id, cls.bucket, channel)
         counters["alerts_posted"] += 1
@@ -215,8 +197,6 @@ def _summary(counters: Counter) -> str:
         "stage1_rate_limited", "stage1_budget_skipped",
         "stage2_called", "stage2_rate_limited", "stage2_budget_skipped",
         "bucket_competitor_mention", "bucket_lead_signal", "bucket_icp_discussion", "bucket_noise",
-        "stage3_called", "stage3_skipped_by_model", "stage3_rate_limited", "stage3_budget_skipped",
-        "stage3_strategy_soft_mention", "stage3_strategy_none", "stage3_strategy_skip",
         "alerts_posted", "already_alerted",
     ]
     pairs = [f"{k}={counters.get(k, 0)}" for k in keys]

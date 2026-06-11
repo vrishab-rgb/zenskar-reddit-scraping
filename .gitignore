@@ -11,3 +11,7 @@ YARS.log
 reports/*.md
 reports/*.csv
 !reports/.gitkeep
+
+# Poster local state — never commit the logged-in browser session or offset.
+.reddit-profile/
+.telegram_offset

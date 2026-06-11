@@ -110,6 +110,48 @@ USER_HINT_TTL_DAYS = 30
 YARS_MIN_INTERVAL_SECONDS = 6.0
 PROMPT_VERSION = "v1"
 
+# --- Engagement drafting (CI side) + posting (local poster) -----------------
+# Drafter runs in the daily monitor workflow right after classification, so
+# drafts land on Telegram at ~09:30 IST and get posted across the day.
+MAX_DRAFTS_PER_RUN = 6        # Telegram queue size per day; matches the 5-6/day ceiling
+DRAFT_LOOKBACK_HOURS = 30     # slight overlap with the daily cron so nothing falls in a gap
+
+# Poster pacing. The local task fires every ~30 min; these knobs turn that
+# into an irregular, human-ish posting pattern instead of a metronome.
+POSTER_DAILY_CAP = 5          # hard ceiling on posts per rolling 24h
+POSTER_ACTIVE_HOURS = (9, 23) # local hours posting is allowed (IST on the host)
+POSTER_SKIP_PROBABILITY = 0.3 # random no-op ticks break up the cadence
+MAX_DRAFT_AGE_HOURS = 36      # threads go cold; stale approved drafts get parked
+
+# Freshness gate at SELECTION time (not just post time). Engagement only has
+# value on live threads — a 4-day-old thread has stopped getting eyeballs and a
+# new top-level comment just looks like necro-posting. Never draft past this.
+MAX_CANDIDATE_AGE_HOURS = 48
+
+# Competitors to EXCLUDE from engagement drafting (intel capture still records
+# them; we just don't comment on their threads). Stripe Billing threads are
+# dominated by Stripe-the-processor / Stripe-stock / generic Stripe API chatter,
+# so commenting there draws wrong-reason scrutiny for little ICP payoff.
+ENGAGE_EXCLUDE_COMPETITORS = {"Stripe Billing"}
+
+# 'Tabs' is the billing vendor but the bare word floods in from guitar tabs,
+# browser tabs, spreadsheet tabs. Two-layer guard for engagement:
+#  1) hard drop anything from a music/instrument sub (the QA check),
+#  2) for a Tabs-only competitor match, require a billing-context token in the
+#     title before we'll draft on it.
+MUSIC_SUBS = {
+    "guitar", "guitarlessons", "guitars", "bass", "bassguitar", "music",
+    "musictheory", "piano", "drums", "ukulele", "luthier", "songwriting",
+    "musicians", "guitarplaying", "fingerstyle", "tabs",
+}
+
+TABS_BILLING_CONTEXT_TOKENS = {
+    "billing", "invoice", "invoicing", "revenue", "rev rec", "saas",
+    "pricing", "subscription", "subscriptions", "metering", "usage",
+    "chargebee", "maxio", "zuora", "stripe", "collections", "ar", "o2c",
+    "finance", "accounting", "startup",
+}
+
 # Per-run budget caps. First-run-on-empty-DB can see 500+ candidates; without
 # caps, stage-1 Groq + YARS rate-limiting can blow past the CI timeout.
 # Excess candidates are simply left for the next cron tick (they're not
@@ -117,14 +159,9 @@ PROMPT_VERSION = "v1"
 MAX_STAGE1_CALLS_PER_RUN = 250
 # Stage-2 uses the 120B model with a 200K/day token bucket. Average
 # stage-2 call burns ~3K tokens (input + JSON output), so 50 calls =
-# ~150K — leaves headroom for stage-3 + future bigger inputs without
-# blowing the daily limit. Tightened from 80 after a run hit 117% usage.
+# ~150K — leaves headroom for future bigger inputs without blowing the daily
+# limit. Tightened from 80 after a run hit 117% usage.
 MAX_STAGE2_CALLS_PER_RUN = 50
-# Stage-3 (comment-suggestion) is gated separately. We don't draft for noise,
-# and only a fraction of stage-2 outputs are non-noise, so this cap mostly
-# bites on first-run. 8B model has ~500K/day; 25 calls/run × 48 runs ≈
-# 1200 calls/day, comfortably under quota.
-MAX_STAGE3_CALLS_PER_RUN = 25
 
 # Multi-source per-run query budgets. Each query = 1 HTTP call. Tuned
 # conservatively so a single run stays under cron's 30-min ceiling and

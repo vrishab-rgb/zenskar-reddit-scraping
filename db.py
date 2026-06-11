@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from config import USER_HINT_TTL_DAYS
-from models import Classification, CommentSuggestion, RedditHit, UserHints
+from models import Classification, RedditHit, UserHints
 
 _session = None
 
@@ -95,27 +95,6 @@ def record_classification(cls: Classification) -> None:
         print(f"[db] record_classification error for {cls.post_id}: {e}")
 
 
-def record_comment_suggestion(s: CommentSuggestion) -> None:
-    payload = {
-        "post_id": s.post_id,
-        "suggested_comment": s.suggested_comment,
-        "plug_strategy": s.plug_strategy,
-        "rationale": s.rationale,
-        "skip_reason": s.skip_reason,
-        "prompt_version": s.prompt_version,
-    }
-    try:
-        resp = _get_session().post(
-            _url("reddit_comment_suggestions"),
-            json=payload,
-            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"[db] record_comment_suggestion error for {s.post_id}: {e}")
-
-
 def was_alerted(post_id: str) -> bool:
     try:
         resp = _get_session().get(
@@ -193,6 +172,172 @@ def add_groq_tokens_used(model: str, additional: int) -> None:
         resp.raise_for_status()
     except Exception as e:
         print(f"[db] add_groq_tokens_used error for {model}: {e}")
+
+
+# --- Engagement drafts + engaged state --------------------------------------
+# Read by the CI drafter (draft_comments.py) and the local poster (poster/).
+# Unlike the monitor's swallow-and-print error style, draft state transitions
+# RAISE on failure: the poster must never submit a comment it couldn't first
+# claim in the DB (double-post protection), so a silent DB failure is unsafe.
+
+# Embedded !inner join: unclassified hits are excluded by the DB, and the
+# bucket filter below removes noise before the limit applies.
+_DRAFT_CANDIDATE_FIELDS = (
+    "post_id, subreddit, title, permalink, created_utc, source, "
+    "reddit_classifications!inner(bucket, pain_points, mentioned_competitors)"
+)
+
+
+def get_recent_classified(lookback_hours: int, max_rows: int = 120) -> list[dict]:
+    """Recent non-noise classified hits for draft selection."""
+    cutoff = _iso(datetime.now(timezone.utc) - timedelta(hours=lookback_hours))
+    try:
+        resp = _get_session().get(
+            _url("reddit_hits"),
+            params={
+                "select": _DRAFT_CANDIDATE_FIELDS,
+                "created_utc": f"gte.{cutoff}",
+                "reddit_classifications.bucket": "neq.noise",
+                "order": "created_utc.desc",
+                "limit": str(max_rows),
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[db] get_recent_classified error: {e}")
+        return []
+
+
+def get_engaged() -> tuple[set[str], set[str]]:
+    """(engaged post_ids, engaged thread_ids) — shared state with the MCP
+    server's reddit_engagement_candidates tool."""
+    try:
+        resp = _get_session().get(
+            _url("reddit_engaged"),
+            params={"select": "post_id,thread_id"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return (
+            {r["post_id"] for r in rows},
+            {r["thread_id"] for r in rows if r.get("thread_id")},
+        )
+    except Exception as e:
+        print(f"[db] get_engaged error: {e}")
+        return set(), set()
+
+
+def mark_engaged(post_id: str, thread_id: str, comment_url: str = "", note: str = "") -> None:
+    """Upsert into reddit_engaged so the candidate stops re-surfacing (both
+    here and in the MCP tool). Mirrors mcp_server/clients/reddit.py."""
+    try:
+        resp = _get_session().post(
+            _url("reddit_engaged"),
+            json={
+                "post_id": post_id,
+                "thread_id": thread_id,
+                "comment_url": comment_url or None,
+                "note": note or None,
+                "engaged_at": _iso(datetime.now(timezone.utc)),
+            },
+            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[db] mark_engaged error for {post_id}: {e}")
+
+
+def get_drafted_ids() -> set[str]:
+    """All post_ids that ever got a draft row (any status) — drafting is
+    one-shot per candidate."""
+    try:
+        resp = _get_session().get(
+            _url("reddit_drafts"),
+            params={"select": "post_id", "order": "created_at.desc", "limit": "2000"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return {r["post_id"] for r in resp.json()}
+    except Exception as e:
+        print(f"[db] get_drafted_ids error: {e}")
+        # Fail CLOSED: returning a fake empty set would re-draft (and re-send
+        # to Telegram) everything. Raising aborts the drafter run instead.
+        raise
+
+
+def insert_draft(row: dict) -> None:
+    resp = _get_session().post(
+        _url("reddit_drafts"),
+        json=row,
+        headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+
+def update_draft(post_id: str, fields: dict) -> None:
+    """PATCH a draft row. Raises on failure — callers rely on state
+    transitions actually landing (see module comment)."""
+    fields = {**fields, "updated_at": _iso(datetime.now(timezone.utc))}
+    resp = _get_session().patch(
+        _url("reddit_drafts"),
+        params={"post_id": f"eq.{post_id}"},
+        json=fields,
+        headers={"Prefer": "return=minimal"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+
+def get_drafts_by_status(status: str) -> list[dict]:
+    resp = _get_session().get(
+        _url("reddit_drafts"),
+        params={"status": f"eq.{status}", "select": "*", "order": "created_at.asc"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_draft_by_telegram_message(message_id: int) -> dict | None:
+    resp = _get_session().get(
+        _url("reddit_drafts"),
+        params={"telegram_message_id": f"eq.{message_id}", "select": "*"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    rows = resp.json()
+    return rows[0] if rows else None
+
+
+def get_draft(post_id: str) -> dict | None:
+    resp = _get_session().get(
+        _url("reddit_drafts"),
+        params={"post_id": f"eq.{post_id}", "select": "*"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    rows = resp.json()
+    return rows[0] if rows else None
+
+
+def count_posted_last_24h() -> int:
+    cutoff = _iso(datetime.now(timezone.utc) - timedelta(hours=24))
+    resp = _get_session().get(
+        _url("reddit_drafts"),
+        params={
+            "status": "eq.posted",
+            "posted_at": f"gte.{cutoff}",
+            "select": "post_id",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return len(resp.json())
 
 
 def get_user_hints(username: str) -> UserHints | None:
